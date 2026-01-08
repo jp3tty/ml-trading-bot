@@ -1,0 +1,12 @@
+{
+  "params": {
+    "window_size": 20,
+    "horizon": 5,
+    "label_threshold": 0.02,
+    "feature_mode": "indicators",
+    "classifier": "random_forest",
+    "n_estimators": 100,
+    "max_depth": 10
+  },
+  "score": 0.42620963927773253
+}

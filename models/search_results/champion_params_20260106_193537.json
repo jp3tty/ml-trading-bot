@@ -1,0 +1,10 @@
+{
+  "params": {
+    "window_size": 10,
+    "horizon": 3,
+    "label_threshold": 0.03,
+    "n_kernels": 3000,
+    "max_samples": 50000
+  },
+  "score": 0.4477577536479996
+}

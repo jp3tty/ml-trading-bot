@@ -1,0 +1,35 @@
+name: Stock Scanner
+
+on:
+  schedule:
+    # Runs at market-aligned 4-hour intervals (UTC times)
+    # 9:30 AM ET = 14:30 UTC, 1:30 PM ET = 18:30 UTC
+    - cron: '30 14 * * 1-5'  # 9:30 AM ET, Mon-Fri
+    - cron: '30 18 * * 1-5'  # 1:30 PM ET, Mon-Fri
+
+  # Allow manual trigger for testing
+  workflow_dispatch:
+
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.14'
+
+      - name: Install dependencies
+        run: |
+          pip install poetry
+          poetry install
+
+      - name: Run scanner
+        env:
+          ALPACA_API_KEY: ${{ secrets.ALPACA_API_KEY }}
+          ALPACA_SECRET_KEY: ${{ secrets.ALPACA_SECRET_KEY }}
+        run: poetry run python alpaca_trading.py

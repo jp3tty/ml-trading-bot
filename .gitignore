@@ -1,0 +1,40 @@
+# Environment
+.env
+.venv/
+venv/
+__pycache__/
+*.pyc
+
+# IDE
+.idea/
+.vscode/
+*.swp
+.cursor/
+
+# Data files (too large for git)
+saved_data/historical/
+*.parquet
+*.pkl
+
+# But keep the directory structure
+!saved_data/.gitkeep
+!models/.gitkeep
+
+# Logs
+*.log
+
+# Jupyter
+.ipynb_checkpoints/
+notebooks/*.ipynb
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Poetry
+poetry.lock  # Optional: some prefer to commit this
+
+# Secrets
+*.txt
+!README.md
+authenticator_app.txt
