@@ -84,7 +84,7 @@ class MLTrader:
 
         elif signal == 'SELL':
             # Close existing positiion if we have one
-            if self.check_exisiting_position(symbol):
+            if self.check_existing_position(symbol):
                 try:
                     self.conn.api.close_position(symbol)
                     logging.info(f"SELL: Closed position in {symbol}")
@@ -132,7 +132,7 @@ class MLTrader:
                 if prediction is None:
                     continue
 
-                signal = predition['signal']
+                signal = prediction['signal']
                 confidence = prediction['confidence']
                 current_price = df['close'].iloc[-1]
 

@@ -1,0 +1,11 @@
+{
+  "params": {
+    "window_size": 30,
+    "horizon": 12,
+    "label_threshold": 0.01,
+    "n_kernels": 2000,
+    "max_samples": 50000
+  },
+  "score": 0.42703381354754394,
+  "timeframe": "4H"
+}
