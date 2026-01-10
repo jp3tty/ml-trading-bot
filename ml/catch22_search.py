@@ -248,6 +248,8 @@ class Catch22Search:
                 'accuracy': accuracy,
                 'f1_weighted': f1,
                 'f1_sell': report['0']['f1-score'] if '0' in report else 0,
+
+                
                 'f1_hold': report['1']['f1-score'] if '1' in report else 0,
                 'f1_buy': report['2']['f1-score'] if '2' in report else 0,
                 'samples_train': len(X_train),

@@ -1,0 +1,15 @@
+{
+  "params": {
+    "window_size": 30,
+    "horizon": 6,
+    "buy_threshold": 0.02,
+    "classifier": "random_forest",
+    "n_estimators": 100,
+    "max_depth": 10,
+    "min_precision": 0.5
+  },
+  "threshold": 0.6507852158165711,
+  "score": 0.019936785801118406,
+  "precision": 0.5,
+  "win_rate": 0.5
+}
