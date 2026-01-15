@@ -69,13 +69,13 @@ class BinaryHyperparameterSearch:
     def define_quick_search_space(self):
         """Smaller search space for faster iteration"""
         return {
-            'window_size': [20],
-            'horizon': [8, 14, 20],
-            'buy_threshold': [0.002, 0.005, 0.008],
-            'classifier': ['random_forest', 'xgboost'], # Can be 'random_forest' or 'xgboost'
-            'n_estimators': [100],
-            'max_depth': [10],
-            'min_precision': [0.3, 0.4],
+            'window_size': [12, 15, 18],
+            'horizon': [3, 4, 5, 6],
+            'buy_threshold': [0.002, 0.003, 0.004],  # Lower threshold = more signals
+            'classifier': ['random_forest'],         # Can be 'random_forest' or 'xgboost'
+            'n_estimators': [100, 150],
+            'max_depth': [8, 10, 12],                # Tree depths
+            'min_precision': [0.52, 0.55],
         }
     
     def load_data(self, window_size, horizon, buy_threshold, max_files=200):
@@ -261,21 +261,23 @@ class BinaryHyperparameterSearch:
             logging.info(f"  Precision: {precision:.3f}, Recall: {recall:.3f}, "
                         f"F1: {f1:.3f}, Win Rate: {win_rate:.1%}")
             
-            # Check if champion (by F1, but only if precision is acceptable)
-            score = f1 if precision >= 0.5 else 0
-            if score > self.champion_score:
-                self.champion_score = score
-                self.champion = {
-                    'params': params,
-                    'model': model,
-                    'scaler': scaler,
-                    'threshold': threshold,
-                    'score': f1,
-                    'precision': precision,
-                    'win_rate': win_rate
-                }
-                logging.info(f"  *** NEW CHAMPION! F1: {f1:.3f}, Precision: {precision:.1%} ***")
-            
+            # Check if champion (by precision, with recall floor)
+            if precision >= 0.5 and recall >= 0.1:
+                score = precision
+                if score > self.champion_score:
+                    self.champion_score = score
+                    self.champion = {
+                        'params': params,
+                        'model': model,
+                        'scaler': scaler,
+                        'threshold': threshold,
+                        'precision': precision,
+                        'recall': recall,
+                        'f1': f1,
+                        'win_rate': win_rate
+                    }
+                    logging.info(f"  *** NEW CHAMPION! Precision: {precision:.1%}, Recall: {recall:.1%} ***")
+
             return result
             
         except Exception as e:
@@ -357,8 +359,9 @@ class BinaryHyperparameterSearch:
             print("="*70)
             print(f"Parameters: {self.champion['params']}")
             print(f"Threshold:  {self.champion['threshold']:.3f}")
-            print(f"F1 Score:   {self.champion['score']:.3f}")
             print(f"Precision:  {self.champion['precision']:.1%}")
+            print(f"Recall:     {self.champion['recall']:.1%}")
+            print(f"F1 Score:   {self.champion['f1']:.3f}")
             print(f"Win Rate:   {self.champion['win_rate']:.1%}")
         
         print("="*70)
@@ -384,27 +387,27 @@ class BinaryHyperparameterSearch:
                 'scaler': self.champion['scaler'],
                 'threshold': self.champion['threshold'],
                 'params': self.champion['params'],
-                'score': self.champion['score'],
                 'precision': self.champion['precision'],
+                'recall': self.champion['recall'],
+                'f1': self.champion['f1'],
                 'win_rate': self.champion['win_rate']
             }
             
             joblib.dump(save_data, model_path)
-            
+
             # Save params as JSON
             params_path = f"{self.results_dir}/champion_params_{timestamp}.json"
             with open(params_path, 'w') as f:
                 json.dump({
                     'params': {k: (int(v) if isinstance(v, np.integer) else
-                                  float(v) if isinstance(v, np.floating) else v)
-                              for k, v in self.champion['params'].items()},
+                                float(v) if isinstance(v, np.floating) else v)
+                            for k, v in self.champion['params'].items()},
                     'threshold': float(self.champion['threshold']),
-                    'score': float(self.champion['score']),
                     'precision': float(self.champion['precision']),
+                    'recall': float(self.champion['recall']),
+                    'f1': float(self.champion['f1']),
                     'win_rate': float(self.champion['win_rate'])
                 }, f, indent=2)
-            
-            logging.info(f"Champion model saved to {model_path}")
 
 
 def run_quick_search():
