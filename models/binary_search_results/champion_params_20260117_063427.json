@@ -1,0 +1,16 @@
+{
+  "params": {
+    "window_size": 18,
+    "horizon": 5,
+    "buy_threshold": 0.002,
+    "classifier": "random_forest",
+    "n_estimators": 150,
+    "max_depth": 10,
+    "min_precision": 0.52
+  },
+  "threshold": 0.5221639349928625,
+  "precision": 0.5202601300650325,
+  "recall": 0.1275499775152283,
+  "f1": 0.20487228314400158,
+  "win_rate": 0.5202601300650325
+}
