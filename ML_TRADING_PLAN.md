@@ -1,3 +1,4 @@
+
 # ML Trading Model Plan
 
 ## Overview
@@ -492,10 +493,193 @@ pip install aeon scikit-learn pyarrow joblib
 
 ---
 
+## Improving the BUY Detector
+
+After initial training, you may find precision is acceptable but recall is low (model is too selective). Here are strategies to improve performance:
+
+---
+
+### 1. Lower the Decision Threshold (Quick Win)
+
+Your model outputs probabilities. Trade precision for recall by lowering the threshold:
+
+```python
+# Current: threshold ~0.5 or optimized for precision
+y_pred = (y_proba >= 0.5).astype(int)
+
+# Try lower threshold for more signals:
+y_pred = (y_proba >= 0.35).astype(int)  # More BUYs, lower precision
+```
+
+Control this in `find_optimal_threshold()` via the `min_precision` parameter.
+
+---
+
+### 2. Use All Available Data
+
+The default `max_files=200` limits training data. Change to use all parquet files:
+
+```python
+# In load_data(), change:
+def load_data(self, window_size, horizon, buy_threshold, max_files=None):  # Use all
+
+# Or set explicitly:
+files = glob.glob(f"{self.data_dir}/*.parquet")  # No slicing
+```
+
+More data → better generalization → potentially better recall.
+
+---
+
+### 3. Relax the Buy Threshold
+
+Lower `buy_threshold` creates more BUY labels in training:
+
+```python
+# Current search space
+'buy_threshold': [0.01, 0.015, 0.02, 0.025]  # 1-2.5% gains
+
+# More relaxed (try these)
+'buy_threshold': [0.005, 0.008, 0.01, 0.012]  # 0.5-1.2% gains
+```
+
+With 4h candles and `horizon=6`, that's targeting 0.5-1.2% gains over 24 hours.
+
+---
+
+### 4. Add More Technical Indicators
+
+Expand beyond the current feature set:
+
+| Indicator | Description | Implementation |
+|-----------|-------------|----------------|
+| **MACD** | Momentum/trend crossovers | `ta-lib` or custom |
+| **Bollinger Bands** | Volatility breakouts | Rolling mean ± 2*std |
+| **ATR** | Average True Range (volatility) | `ta-lib` or custom |
+| **OBV** | On-Balance Volume | Cumulative volume direction |
+| **Stochastic** | Overbought/oversold | %K and %D lines |
+| **ADX** | Trend strength | Directional movement index |
+
+Example implementation:
+
+```python
+# Bollinger Bands
+df['bb_middle'] = df['close'].rolling(20).mean()
+df['bb_upper'] = df['bb_middle'] + 2 * df['close'].rolling(20).std()
+df['bb_lower'] = df['bb_middle'] - 2 * df['close'].rolling(20).std()
+df['bb_position'] = (df['close'] - df['bb_lower']) / (df['bb_upper'] - df['bb_lower'])
+
+# MACD
+ema12 = df['close'].ewm(span=12).mean()
+ema26 = df['close'].ewm(span=26).mean()
+df['macd'] = ema12 - ema26
+df['macd_signal'] = df['macd'].ewm(span=9).mean()
+df['macd_hist'] = df['macd'] - df['macd_signal']
+```
+
+---
+
+### 5. Multi-Timeframe Features
+
+Add longer-term context to short-term signals:
+
+```python
+# For 4-hour data
+df['daily_trend'] = df['close'].rolling(6).mean() > df['close'].rolling(24).mean()
+df['weekly_momentum'] = df['close'].pct_change(42)  # ~1 week of 4h bars
+df['monthly_trend'] = df['close'].rolling(180).mean().pct_change(42)
+```
+
+---
+
+### 6. Filter for Quality Stocks
+
+Exclude low-volume or penny stocks that are harder to predict:
+
+```python
+# In data loading or feature building
+if df['volume'].mean() < 500000:  # Skip illiquid
+    continue
+if df['close'].mean() < 5:  # Skip penny stocks
+    continue
+```
+
+---
+
+### 7. Class Weights Tuning
+
+Adjust class weights to prioritize catching BUY signals:
+
+```python
+# RandomForestClassifier
+RandomForestClassifier(
+    class_weight={0: 1, 1: 3},  # 3x importance on BUY
+    ...
+)
+
+# XGBoost
+XGBClassifier(
+    scale_pos_weight=10,  # Higher = more weight on minority class
+    ...
+)
+```
+
+---
+
+### 8. Ensemble Multiple Models
+
+Combine predictions from different configurations:
+
+```python
+# Train multiple models with different settings
+model_rf = RandomForestClassifier(...)
+model_xgb = XGBClassifier(...)
+model_catch22 = RandomForestClassifier(...)  # Trained on catch22 features
+
+# Ensemble predictions
+pred1 = model_rf.predict_proba(X)[:, 1]
+pred2 = model_xgb.predict_proba(X)[:, 1]
+pred3 = model_catch22.predict_proba(X)[:, 1]
+
+ensemble_proba = (pred1 + pred2 + pred3) / 3
+buy_signal = ensemble_proba > 0.4
+```
+
+---
+
+### 9. Add Market Context Features
+
+Include broader market conditions:
+
+```python
+# Fetch SPY or sector ETF data
+spy_df = fetch_spy_data()
+
+# Add market momentum
+df['market_trend'] = spy_df['close'].pct_change(10)
+df['market_above_sma'] = (spy_df['close'] > spy_df['close'].rolling(50).mean()).astype(int)
+
+# Sector relative strength
+df['rel_strength'] = df['close'].pct_change(20) - spy_df['close'].pct_change(20)
+```
+
+---
+
+### Improvement Priority Order
+
+1. **Use all data files** - Free improvement, no code changes needed
+2. **Lower `buy_threshold` to 0.008-0.01** - More training signal
+3. **Adjust `min_precision` to 0.4** - Trade some precision for recall
+4. **Add MACD and Bollinger Bands** - Proven short-term indicators
+5. **Ensemble models** - Combine multiple approaches
+
+---
+
 ## Next Steps
 
 1. Start with data collection - this takes the longest
 2. Run feature builder on a few stocks to validate
 3. Train a quick RocketClassifier to establish a baseline
 4. Iterate on features and labeling based on results
+5. Apply improvement strategies from the section above
 
