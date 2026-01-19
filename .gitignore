@@ -26,6 +26,7 @@ saved_data/historical/
 # Jupyter
 .ipynb_checkpoints/
 notebooks/*.ipynb
+ml/*.ipynb
 
 # OS
 .DS_Store
