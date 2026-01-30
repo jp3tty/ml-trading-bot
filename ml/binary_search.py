@@ -69,7 +69,7 @@ class BinaryHyperparameterSearch:
     def define_quick_search_space(self):
         """Smaller search space for faster iteration"""
         return {
-            'window_size': [12, 15, 18],
+            'window_size': [15, 18, 21],
             'horizon': [3, 4, 5, 6],
             'buy_threshold': [0.002, 0.003, 0.004],  # Lower threshold = more signals
             'classifier': ['random_forest'],         # Can be 'random_forest' or 'xgboost'
@@ -78,7 +78,7 @@ class BinaryHyperparameterSearch:
             'min_precision': [0.52, 0.55],
         }
     
-    def load_data(self, window_size, horizon, buy_threshold, max_files=200):
+    def load_data(self, window_size, horizon, buy_threshold, max_files=None):
         """Load and build features with given parameters"""
         try:
             from ml.binary_feature_builder import BinaryFeatureBuilder
