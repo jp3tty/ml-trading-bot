@@ -263,7 +263,7 @@ class BinaryHyperparameterSearch:
             
             # Check if champion (by precision, with recall floor)
             if precision >= 0.5 and recall >= 0.1:
-                score = precision
+                score = f1 
                 if score > self.champion_score:
                     self.champion_score = score
                     self.champion = {

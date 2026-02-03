@@ -3,15 +3,56 @@
 
 ## Overview
 
-Build a machine learning model using **aeon** (time series ML library) trained on historical stock data from Alpaca. The model will interpret candlestick indicators to make buy/sell/hold decisions.
+Build separate **binary classification models** for BUY and SELL signal detection, trained on historical stock data from Alpaca. This modular approach allows independent optimization of entry (BUY) and exit (SELL) decisions.
+
+### Strategy: Early-Exit Short-Term Trading
+- **Entry**: High-precision BUY signals (minimize false positives)
+- **Exit**: Fast SELL signals at first sign of decline
+- **Hold**: Default state when neither detector triggers
+
+### Why Separate Detectors?
+
+| Approach | Pros | Cons |
+|----------|------|------|
+| 3-class (SELL/HOLD/BUY) | Simpler, one model | Can't tune entry/exit independently |
+| **Separate BUY/SELL** | Independent optimization, better control | More complex, two models to maintain |
+
+For an early-exit strategy, separate detectors allow:
+- **BUY detector**: Tuned for high precision (55%+ win rate)
+- **SELL detector**: Tuned for sensitivity (quick exits)
 
 ---
 
 ## Architecture
 
 ```
-1. Data Collection → 2. Feature Engineering → 3. Labeling → 4. Model Training → 5. Backtesting
+                    ┌──────────────────┐
+                    │  Data Collection │
+                    └────────┬─────────┘
+                             │
+                   ┌─────────▼───────────┐
+                   │ Feature Engineering │
+                   └─────────┬───────────┘
+                             │
+              ┌──────────────┼──────────────┐
+              │              │              │
+     ┌────────▼────────┐     │     ┌────────▼────────┐
+     │  BUY Detector   │     │     │  SELL Detector  │
+     │  (Binary: 0/1)  │     │     │  (Binary: 0/1)  │
+     └────────┬────────┘     │     └────────┬────────┘
+              │              │              │
+              └──────────────┼──────────────┘
+                             │
+                    ┌────────▼────────┐
+                    │   ML Trader     │
+                    │  (Orchestrator) │
+                    └─────────────────┘
 ```
+
+### Signal Flow
+1. **No position**: Only BUY detector runs → triggers entry if confident
+2. **In position**: Only SELL detector runs → triggers exit if declining
+3. **Default**: HOLD (no action)
 
 ---
 
@@ -210,189 +251,249 @@ class FeatureBuilder:
 
 ## Step 3: Labeling Strategy
 
-### Current Approach: Future Return Classification
+### Binary Classification Approach (Current)
 
+Instead of 3-class classification, we use **separate binary detectors**:
+
+#### BUY Detector Labels
 ```
-Label 0 (SELL):  future_return < -2%
-Label 1 (HOLD):  -2% <= future_return <= +2%
-Label 2 (BUY):   future_return > +2%
+Label 1 (BUY):     future_return > buy_threshold (e.g., +1.5%)
+Label 0 (NOT_BUY): Everything else
 ```
 
-### Alternative Labeling Strategies to Explore
+#### SELL Detector Labels (Future)
+```
+Label 1 (SELL):     future_return < sell_threshold (e.g., -1%)
+Label 0 (NOT_SELL): Everything else
+```
 
-1. **Triple Barrier Method** (Lopez de Prado)
-   - Take profit barrier (upper)
-   - Stop loss barrier (lower)
-   - Time barrier (max holding period)
+### Key Parameters
 
-2. **Trend Following**
-   - Label based on SMA crossovers
-   - Label based on price breaking support/resistance
+| Parameter | Description | Typical Values |
+|-----------|-------------|----------------|
+| `window_size` | Candles of history for features | 15-30 |
+| `horizon` | Candles ahead for label calculation | 3-9 |
+| `buy_threshold` | Min return to label as BUY | 0.015-0.03 (1.5-3%) |
+| `sell_threshold` | Max return to label as SELL | -0.01 to -0.02 |
 
-3. **Volatility-Adjusted Returns**
-   - Adjust thresholds based on recent ATR
-   - Higher volatility = wider bands
+### Metric Targets for Early-Exit Strategy
+
+| Metric | Target | Why |
+|--------|--------|-----|
+| **Precision** | ≥ 55% | Win rate must exceed 50% + transaction costs |
+| **Recall** | ≥ 10% | Enough signals to make trading worthwhile |
+| **F1 Score** | Maximize (with floors) | Balance precision and recall |
 
 ---
 
-## Step 4: Model Training with Aeon
+## Step 4: Model Training (Binary Detectors)
 
-### Recommended Models
+### Recommended Models for Binary Classification
 
 | Model | Pros | Cons | Best For |
 |-------|------|------|----------|
-| **RocketClassifier** | Fast, excellent accuracy | Less interpretable | Quick iterations |
-| **MiniRocket** | Very fast, good accuracy | Less flexible | Large datasets |
-| **InceptionTimeClassifier** | Deep learning, captures complex patterns | Slower, needs GPU | Final model |
-| **HIVE-COTE 2** | State-of-the-art ensemble | Very slow | Benchmarking |
+| **RandomForest** | Fast, handles imbalance well | Less pattern recognition | Quick iterations |
+| **XGBoost** | Excellent performance, handles imbalance | Requires tuning | Production |
+| **catch22 + RF** | Time series features + fast training | Feature extraction overhead | Current approach |
+
+### Feature Modes
+
+| Mode | Features | Speed | Accuracy |
+|------|----------|-------|----------|
+| `indicators` | Technical indicators (RSI, momentum, patterns) | Fast | Good |
+| `catch22` | 22 time series statistics on price + volume | Medium | Better |
+| `combined` | Both indicator and catch22 features | Slow | Best |
 
 ### Implementation
 
-Create: `ml/trainer.py`
+Implemented in: `ml/binary_search.py` and `ml/binary_feature_builder.py`
 
 ```python
-from aeon.classification.convolution_based import RocketClassifier
-from aeon.classification.deep_learning import InceptionTimeClassifier
-from sklearn.model_selection import train_test_split
-from sklearn.metrics import classification_report
-import numpy as np
-import pandas as pd
-import glob
-import joblib
+from ml.binary_feature_builder import BinaryFeatureBuilder
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.preprocessing import StandardScaler
 
-class TradingModelTrainer:
-    def __init__(self):
-        self.model = None
-    
-    def prepare_dataset(self, data_dir, feature_builder):
-        """Load all parquet files and build combined dataset"""
-        all_X, all_y = [], []
-        files = glob.glob(f"{data_dir}/*.parquet")
-        
-        for f in files:
-            df = pd.read_parquet(f)
-            if len(df) > 100:  # Need enough data
-                X, y = feature_builder.build_features(df)
-                if len(X) > 0:
-                    all_X.append(X)
-                    all_y.append(y)
-        
-        X = np.concatenate(all_X, axis=0)
-        y = np.concatenate(all_y, axis=0)
-        
-        return X, y
-    
-    def train(self, X, y, model_type='rocket'):
-        """Train the classifier"""
-        # IMPORTANT: Don't shuffle time series data!
-        X_train, X_test, y_train, y_test = train_test_split(
-            X, y, test_size=0.2, shuffle=False
-        )
-        
-        if model_type == 'rocket':
-            self.model = RocketClassifier(num_kernels=10000, random_state=42)
-        elif model_type == 'inception':
-            self.model = InceptionTimeClassifier(n_epochs=100, random_state=42)
-        
-        print(f"Training {model_type} on {len(X_train)} samples...")
-        self.model.fit(X_train, y_train)
-        
-        # Evaluate
-        y_pred = self.model.predict(X_test)
-        print(classification_report(y_test, y_pred, 
-                                    target_names=['Sell', 'Hold', 'Buy']))
-        
-        return self.model
-    
-    def save_model(self, path="models/trading_model.pkl"):
-        """Save trained model"""
-        joblib.dump(self.model, path)
-    
-    def load_model(self, path="models/trading_model.pkl"):
-        """Load trained model"""
-        self.model = joblib.load(path)
-        return self.model
+# Build features
+feature_builder = BinaryFeatureBuilder(
+    window_size=15,
+    horizon=6,
+    buy_threshold=0.02,
+    feature_mode='catch22'
+)
+
+X, y = feature_builder.build_features(df)
+
+# Scale features (required for sklearn models)
+scaler = StandardScaler()
+X_scaled = scaler.fit_transform(X)
+
+# Train with class balancing
+model = RandomForestClassifier(
+    n_estimators=200,
+    max_depth=8,
+    class_weight='balanced',
+    random_state=42
+)
+model.fit(X_train, y_train)
 ```
 
-### Training Script
+### Hyperparameter Search
+
+Use `ml/binary_search.py` for grid search:
 
 ```python
-from ml.feature_builder import FeatureBuilder
-from ml.trainer import TradingModelTrainer
+from ml.binary_search import BinaryHyperparameterSearch
 
-# Initialize
-feature_builder = FeatureBuilder(window_size=20, horizon=5)
-trainer = TradingModelTrainer()
+search = BinaryHyperparameterSearch(
+    data_dir="saved_data/historical_4h",
+    results_dir="models/binary_search_results"
+)
 
-# Load and prepare data
-X, y = trainer.prepare_dataset("saved_data/historical", feature_builder)
-print(f"Dataset shape: X={X.shape}, y={y.shape}")
+# Run search
+champion = search.run_search(quick=True)
 
-# Train model
-model = trainer.train(X, y, model_type='rocket')
+# Champion saved to:
+# - models/binary_search_results/champion_binary_{timestamp}.pkl
+# - models/binary_search_results/champion_params_{timestamp}.json
+```
 
-# Save model
-trainer.save_model("models/rocket_trading_model.pkl")
+### Champion Selection Criteria
+
+Champions are selected by **highest F1 score** with minimum thresholds:
+
+```python
+# Only consider models that meet both criteria:
+if precision >= 0.5 and recall >= 0.1:
+    score = f1  # Rank by F1 among qualifying models
 ```
 
 ---
 
 ## Step 5: Live Inference / Backtesting
 
-### Live Prediction
+### Binary Predictor
 
-Create: `ml/predictor.py`
+Create: `ml/binary_predictor.py`
 
 ```python
 import numpy as np
 import joblib
+import glob
+import os
 
-class TradingPredictor:
-    def __init__(self, model_path, feature_builder):
-        self.model = joblib.load(model_path)
-        self.feature_builder = feature_builder
+from ml.binary_feature_builder import BinaryFeatureBuilder
+
+class BinaryBuyPredictor:
+    """
+    Loads a trained binary BUY detector and makes predictions.
+    """
     
-    def predict(self, recent_bars_df):
+    def __init__(self, model_path=None):
         """
-        Predict buy/sell/hold for current market state.
-        recent_bars_df: DataFrame with last `window_size` candles
+        Args:
+            model_path: Path to champion .pkl file. If None, loads latest.
         """
-        X, _ = self.feature_builder.build_features(recent_bars_df)
+        if model_path is None:
+            model_path = self._find_latest_champion()
+        
+        self.model_data = joblib.load(model_path)
+        self.model = self.model_data['model']
+        self.scaler = self.model_data['scaler']
+        self.threshold = self.model_data['threshold']
+        self.params = self.model_data['params']
+        
+        # Create feature builder with same params used in training
+        self.feature_builder = BinaryFeatureBuilder(
+            window_size=self.params['window_size'],
+            horizon=self.params.get('horizon', 6),
+            buy_threshold=self.params.get('buy_threshold', 0.02),
+            feature_mode='catch22'
+        )
+    
+    def _find_latest_champion(self):
+        """Find most recent champion model"""
+        pattern = "models/binary_search_results/champion_binary_*.pkl"
+        files = sorted(glob.glob(pattern))
+        if not files:
+            raise FileNotFoundError(f"No champion models found")
+        return files[-1]
+    
+    def predict(self, df):
+        """
+        Predict BUY/NOT_BUY for most recent data point.
+        
+        Returns:
+            dict with 'signal', 'probability', 'threshold', 'is_buy'
+        """
+        X, _ = self.feature_builder.build_features(df)
         
         if len(X) == 0:
             return None
         
-        # Use only the most recent window
-        latest_window = X[-1:] 
+        # Use most recent window, flatten if needed
+        latest = X[-1:].reshape(1, -1) if len(X[-1:].shape) > 2 else X[-1:]
         
-        prediction = self.model.predict(latest_window)[0]
-        probabilities = self.model.predict_proba(latest_window)[0]
+        # Scale and predict
+        latest_scaled = self.scaler.transform(latest)
+        proba = self.model.predict_proba(latest_scaled)[0, 1]
         
-        labels = ['SELL', 'HOLD', 'BUY']
         return {
-            'signal': labels[prediction],
-            'confidence': probabilities[prediction],
-            'probabilities': dict(zip(labels, probabilities))
+            'signal': 'BUY' if proba >= self.threshold else 'NOT_BUY',
+            'probability': float(proba),
+            'threshold': self.threshold,
+            'is_buy': proba >= self.threshold
+        }
+    
+    def get_model_info(self):
+        """Return model metadata"""
+        return {
+            'params': self.params,
+            'threshold': self.threshold,
+            'precision': self.model_data.get('precision'),
+            'recall': self.model_data.get('recall'),
+            'f1': self.model_data.get('f1'),
+            'win_rate': self.model_data.get('win_rate')
         }
 ```
 
-### Integration with Alpaca Streaming
+### Integration with ML Trader
 
 ```python
-async def on_bar(self, bar):
-    """Enhanced on_bar with ML prediction"""
-    # Fetch recent history for this symbol
-    recent_df = self.get_historical_data(bar.symbol, days=30)
+class MLTrader:
+    def __init__(self, paper=True):
+        self.conn = AlpacaConnection(paper=paper)
+        
+        # Load binary detectors
+        self.buy_detector = BinaryBuyPredictor()  # Loads latest champion
+        # self.sell_detector = BinarySellPredictor()  # Future
     
-    # Get ML prediction
-    prediction = self.predictor.predict(recent_df)
+    def should_buy(self, df):
+        """Check if BUY detector triggers"""
+        prediction = self.buy_detector.predict(df)
+        if prediction and prediction['is_buy']:
+            return True, prediction['probability']
+        return False, 0.0
     
-    if prediction and prediction['confidence'] > 0.7:
-        if prediction['signal'] == 'BUY':
-            self.place_bracket_order(bar.symbol, qty=1, ...)
-        elif prediction['signal'] == 'SELL':
-            # Close position or short
-            pass
+    def should_sell(self, df):
+        """Check if SELL detector triggers (placeholder)"""
+        # TODO: Implement SELL detector
+        # For now, use simple stop-loss / take-profit
+        return False, 0.0
+    
+    def run(self, symbols):
+        for symbol in symbols:
+            df = self.fetch_recent_data(symbol)
+            
+            if not self.check_existing_position(symbol):
+                # No position - check BUY
+                should_buy, confidence = self.should_buy(df)
+                if should_buy:
+                    self.execute_trade(symbol, 'BUY', confidence)
+            else:
+                # In position - check SELL
+                should_sell, confidence = self.should_sell(df)
+                if should_sell:
+                    self.execute_trade(symbol, 'SELL', confidence)
 ```
 
 ---
@@ -400,96 +501,143 @@ async def on_bar(self, bar):
 ## Project Structure
 
 ```
-auto_trade/
+ml-trading-bot/
 ├── data_collection/
 │   ├── __init__.py
-│   └── historical_collector.py    # Bulk data fetching
+│   └── historical_collector.py       # Bulk data fetching
 ├── ml/
 │   ├── __init__.py
-│   ├── feature_builder.py         # Candlestick → ML features
-│   ├── trainer.py                 # Aeon model training
-│   └── predictor.py               # Live inference
+│   ├── feature_builder.py            # Original 3-class features (legacy)
+│   ├── binary_feature_builder.py     # Binary classification features
+│   ├── binary_search.py              # Hyperparameter grid search
+│   ├── binary_predictor.py           # BUY detector inference
+│   ├── trainer.py                    # Original trainer (legacy)
+│   └── predictor.py                  # Original predictor (legacy)
 ├── saved_data/
-│   ├── historical/                # Parquet files per ticker
-│   ├── FinVizData.csv
+│   ├── historical/                   # Daily parquet files
+│   ├── historical_4h/                # 4-hour parquet files
 │   └── scan_results.csv
-├── models/                        # Saved trained models
-│   └── rocket_trading_model.pkl
-├── notebooks/
-│   └── eda.ipynb
+├── models/
+│   ├── binary_search_results/        # Grid search outputs
+│   │   ├── champion_binary_*.pkl     # Best model + scaler + params
+│   │   ├── champion_params_*.json    # Human-readable params
+│   │   └── binary_search_*.csv       # All search results
+│   └── rocket_trading_model.pkl      # Legacy 3-class model
 ├── stock_picker/
 │   └── stock_screener.py
-├── techAnalysis.py                # Existing indicators
-├── alpaca_trading.py              # Existing trading code
+├── techAnalysis.py                   # Technical indicators
+├── alpaca_trading.py                 # Alpaca API wrapper
+├── ml_trader.py                      # Main trading orchestrator
+├── ML_TRADING_PLAN.md                # This document
 ├── pyproject.toml
 └── README.md
 ```
 
 ---
 
-## Dependencies to Add
+## Dependencies
 
-Add to `pyproject.toml`:
+### Required for Binary Detectors
 
 ```toml
 [tool.poetry.dependencies]
-aeon = "^0.7.0"
-scikit-learn = "^1.3.0"
-pyarrow = "^14.0.0"  # For parquet support
-joblib = "^1.3.0"    # Model serialization
+scikit-learn = "^1.3.0"    # RandomForest, StandardScaler
+xgboost = "^2.0.0"         # XGBoost classifier
+pycatch22 = "^0.4.0"       # Time series features
+pyarrow = "^14.0.0"        # Parquet support
+joblib = "^1.3.0"          # Model serialization
+pandas = "^2.0.0"
+numpy = "^1.24.0"
 ```
 
-Or install via pip:
+### Optional (for alternative approaches)
+
+```toml
+aeon = "^0.7.0"            # Time series ML (RocketClassifier, etc.)
+```
+
+### Install via pip:
 
 ```bash
-pip install aeon scikit-learn pyarrow joblib
+pip install scikit-learn xgboost pycatch22 pyarrow joblib pandas numpy
 ```
 
 ---
 
 ## Implementation Checklist
 
-- [ ] **Phase 1: Data Collection**
-  - [ ] Create `data_collection/historical_collector.py`
-  - [ ] Fetch symbols list from Alpaca
-  - [ ] Download 2+ years of daily data for 500+ stocks
-  - [ ] Save to parquet files
+### Phase 1: Data Collection ✅
+- [x] Create `data_collection/historical_collector.py`
+- [x] Fetch symbols list from Alpaca
+- [x] Download historical data (daily and 4-hour)
+- [x] Save to parquet files
 
-- [ ] **Phase 2: Feature Engineering**
-  - [ ] Create `ml/feature_builder.py`
-  - [ ] Integrate existing `TechnicalAnalysis` indicators
-  - [ ] Test feature generation on sample data
+### Phase 2: Feature Engineering ✅
+- [x] Create `ml/binary_feature_builder.py`
+- [x] Implement indicator mode (technical indicators)
+- [x] Implement catch22 mode (time series features)
+- [x] Implement combined mode
 
-- [ ] **Phase 3: Model Training**
-  - [ ] Create `ml/trainer.py`
-  - [ ] Train initial RocketClassifier
-  - [ ] Evaluate with classification report
-  - [ ] Experiment with hyperparameters
+### Phase 3: BUY Detector Training ✅
+- [x] Create `ml/binary_search.py` (hyperparameter grid search)
+- [x] Implement precision/recall optimization
+- [x] Champion selection by F1 with precision/recall floors
+- [x] Save champion model with scaler and threshold
 
-- [ ] **Phase 4: Live Integration**
-  - [ ] Create `ml/predictor.py`
-  - [ ] Integrate with `on_bar` handler
-  - [ ] Paper trade for validation
+### Phase 4: BUY Detector Integration 🔄
+- [ ] Create `ml/binary_predictor.py`
+- [ ] Update `ml_trader.py` to use binary predictor
+- [ ] Paper trade for validation
 
-- [ ] **Phase 5: Refinement**
-  - [ ] Try alternative labeling strategies
-  - [ ] Add more features (volume patterns, etc.)
-  - [ ] Test InceptionTime for comparison
-  - [ ] Build backtesting framework
+### Phase 5: SELL Detector ⏳
+- [ ] Create `ml/binary_sell_feature_builder.py`
+- [ ] Create `ml/binary_sell_search.py`
+- [ ] Train SELL detector (optimize for speed/sensitivity)
+- [ ] Create `ml/binary_sell_predictor.py`
+- [ ] Integrate with ml_trader.py
+
+### Phase 6: Full Integration ⏳
+- [ ] Combine BUY and SELL detectors in ml_trader.py
+- [ ] Implement position management logic
+- [ ] Paper trade complete system
+- [ ] Build backtesting framework
+
+### Phase 7: Refinement ⏳
+- [ ] Ensemble multiple models
+- [ ] Add market context features (SPY correlation)
+- [ ] Walk-forward validation
+- [ ] Live trading (with small position sizes)
 
 ---
 
 ## Tips & Considerations
 
-1. **Class Imbalance**: Markets are often sideways. Expect many "HOLD" labels. Use stratified sampling or class weights.
+1. **Class Imbalance**: BUY signals are rare. Use `class_weight='balanced'` or `scale_pos_weight`.
 
-2. **Data Leakage**: Never shuffle time series data. Always use temporal splits.
+2. **Data Leakage**: Never shuffle time series data. Always use temporal splits (`shuffle=False`).
 
-3. **Transaction Costs**: Include commissions/slippage in backtesting.
+3. **Transaction Costs**: A 50% win rate is break-even before fees. Target 55%+ precision.
 
-4. **Overfitting**: Financial data is noisy. Use walk-forward validation.
+4. **Overfitting**: Financial data is noisy. Watch for high recall with near-zero precision.
 
-5. **Feature Importance**: After training, analyze which indicators matter most.
+5. **Vacuously True Results**: 100% precision with <1% recall = model barely fires. Useless.
+
+6. **Threshold Optimization**: The optimal threshold from training is saved with the model. Use it!
+
+---
+
+## Precision vs Recall Trade-off
+
+For early-exit trading strategy:
+
+| Precision | Recall | Trades/Month | Profitability |
+|-----------|--------|--------------|---------------|
+| 100% | 0.01% | ~1 | ❌ Statistically meaningless |
+| 60% | 20% | Many | ✅ Sweet spot |
+| 55% | 35% | Very many | ✅ Good if fees are low |
+| 50% | 50% | Too many | ❌ Break-even before fees |
+
+**Target: 55-60% precision with 20-40% recall**
 
 ---
 
@@ -677,9 +825,26 @@ df['rel_strength'] = df['close'].pct_change(20) - spy_df['close'].pct_change(20)
 
 ## Next Steps
 
-1. Start with data collection - this takes the longest
-2. Run feature builder on a few stocks to validate
-3. Train a quick RocketClassifier to establish a baseline
-4. Iterate on features and labeling based on results
-5. Apply improvement strategies from the section above
+### Immediate (BUY Detector Integration)
+1. Create `ml/binary_predictor.py` to load and use champion model
+2. Update `ml_trader.py` to use binary predictor for BUY signals
+3. Paper trade to validate BUY detector performance
+
+### Short-term (SELL Detector)
+1. Design SELL detector labeling strategy (detect declining prices)
+2. Create `ml/binary_sell_feature_builder.py`
+3. Run hyperparameter search for SELL detector
+4. Integrate SELL detector with ml_trader.py
+
+### Medium-term (Optimization)
+1. Tune BUY detector for higher precision (target 58%+)
+2. Tune SELL detector for faster exits
+3. Add market context features (SPY trend, VIX, sector performance)
+4. Implement walk-forward validation
+
+### Long-term (Production)
+1. Build comprehensive backtesting framework
+2. Paper trade complete system for 1+ months
+3. Gradual live trading with small positions
+4. Monitor and retrain models periodically
 
