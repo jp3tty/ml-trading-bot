@@ -25,7 +25,7 @@ xgboost = "^3.1.2"
 ipykernel = "^7.1.0"
 
 [tool.poetry.group.legacy.dependencies]
-# Legacy IB dependencies (optional, for ibkrTrading.py)
+# Legacy IB dependencies (optional, for Streaming_Method/interactive_broker_deprecated/)
 # ibapi = "*"
 
 [build-system]

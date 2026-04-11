@@ -44,4 +44,4 @@ class BinaryBuyPredictor:
         if model_path is None:
             model_path = self._find_latest_champion()
 
-        self.model_path = model_path
+        self.model_path = model_path 

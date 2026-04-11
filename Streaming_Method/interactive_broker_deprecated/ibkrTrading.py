@@ -1,3 +1,6 @@
+import sys
+from pathlib import Path
+
 from ibapi.client import EClient
 from ibapi.common import BarData
 from ibapi.common import TickerId
@@ -6,8 +9,13 @@ from ibapi.contract import Contract
 import threading
 import time
 import pandas as pd
+
+_ROOT = Path(__file__).resolve().parents[2]
+if str(_ROOT) not in sys.path:
+    sys.path.insert(0, str(_ROOT))
 from techAnalysis import TechnicalAnalysis
-from orderManager import OrderManager
+
+from .orderManager import OrderManager
 
 pd.set_option('display.max_rows', None)
 pd.set_option('display.max_columns', None)

@@ -6,7 +6,7 @@ Automated stock trading system combining technical analysis with machine learnin
 
 This project has two modes of operation:
 
-1. **Stock Scanner** - Screens stocks using technical indicators and candlestick patterns
+1. **Stock Scanner** (pattern path, `Streaming_Method/`) - Screens stocks using technical indicators and candlestick patterns
 2. **ML Trader** - Uses trained ML models to predict buy/sell signals and execute trades
 
 ## Architecture
@@ -44,9 +44,13 @@ This project has two modes of operation:
 
 ```
 auto_trade/
-├── alpaca_trading.py           # Stock scanner + Alpaca connection
+├── alpaca_trading.py           # Alpaca REST client (ML + data collection)
+├── Streaming_Method/           # Pattern scanner, streaming bars, legacy IBKR
+│   ├── scanner.py              # FinViz technical scan CLI
+│   ├── streaming_alpaca.py     # Real-time bars + hammer trades
+│   └── pattern_exits.py        # Rule-based exits (optional)
 ├── ml_trader.py                # ML-based trading (cron job)
-├── techAnalysis.py             # Technical indicators & patterns
+├── techAnalysis.py             # Technical indicators & patterns (shared)
 ├── data_collection/
 │   ├── __init__.py
 │   └── historical_collector.py # Bulk historical data fetching
@@ -77,7 +81,9 @@ auto_trade/
 
 | File | Description |
 |------|-------------|
-| `alpaca_trading.py` | Main scanner. Fetches data, runs tech analysis, outputs results |
+| `alpaca_trading.py` | Alpaca REST wrapper used by ML trader and data collectors |
+| `Streaming_Method/scanner.py` | FinViz-driven technical scan → `saved_data/scan_results.csv` |
+| `Streaming_Method/streaming_alpaca.py` | WebSocket bars + pattern-based bracket orders |
 | `ml_trader.py` | Cron-based ML trader. Fetches data, predicts, executes trades |
 | `techAnalysis.py` | Technical analysis: RSI, momentum, candlestick patterns |
 | `data_collection/historical_collector.py` | Bulk fetch 2+ years of data for ML training |
@@ -162,7 +168,7 @@ ALPACA_SECRET_KEY=your_secret_key_here
 
 ```bash
 # Run the scanner - outputs to saved_data/scan_results.csv
-poetry run python alpaca_trading.py
+poetry run python -m Streaming_Method.scanner
 ```
 
 ### 2. Collect Historical Data (ML Training)

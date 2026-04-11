@@ -526,7 +526,8 @@ ml-trading-bot/
 ├── stock_picker/
 │   └── stock_screener.py
 ├── techAnalysis.py                   # Technical indicators
-├── alpaca_trading.py                 # Alpaca API wrapper
+├── alpaca_trading.py                 # Alpaca REST (ML + collectors)
+├── Streaming_Method/                 # Pattern scanner, streaming, legacy IBKR
 ├── ml_trader.py                      # Main trading orchestrator
 ├── ML_TRADING_PLAN.md                # This document
 ├── pyproject.toml
