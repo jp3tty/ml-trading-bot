@@ -24,19 +24,19 @@ class BinaryBuyPredictor:
 
     Usage:
         predictor = BinaryBuyPredictor() # Loads latest champion
-        prediction = predictor.predict(df) # df is OHLCV DataFrame 
-    
+        prediction = predictor.predict(df) # df is OHLCV DataFrame
+
         if prediction['is_buy']:
             # Execute BUY signal
     """
 
-    def __init__(self, model_path=None, results_dir="models/binary_search_results"): 
+    def __init__(self, model_path=None, results_dir="models/binary_search_results"):
         """
         Initialize the predictor.
 
         Args:
             model_path: Path to specific champion .pkl file.
-                        In None, loads the most recent champion.
+                        If None, loads the most recent champion.
             results_dir: Directory containing champion models.
         """
         self.results_dir = results_dir
@@ -44,4 +44,79 @@ class BinaryBuyPredictor:
         if model_path is None:
             model_path = self._find_latest_champion()
 
-        self.model_path = model_path 
+        self.model_path = model_path
+        logging.info(f"Loading champion model from: {model_path}")
+
+        self.model_data = joblib.load(model_path)
+        self.model = self.model_data['model']
+        self.scaler = self.model_data['scaler']
+        self.threshold = self.model_data['threshold']
+        self.params = self.model_data['params']
+
+        # Create feature builder with same params used in training
+        self.feature_builder = BinaryFeatureBuilder(
+            window_size=self.params['window_size'],
+            horizon=self.params.get('horizon', 6),
+            buy_threshold=self.params.get('buy_threshold', 0.02),
+            feature_mode=self.params.get('feature_mode', 'catch22')
+        )
+
+        logging.info(
+            f"Model loaded | threshold={self.threshold:.3f} | "
+            f"precision={self.model_data.get('precision', 'N/A')} | "
+            f"recall={self.model_data.get('recall', 'N/A')} | "
+            f"f1={self.model_data.get('f1', 'N/A')}"
+        )
+
+    def _find_latest_champion(self):
+        """Find most recent champion model file."""
+        pattern = os.path.join(self.results_dir, "champion_binary_*.pkl")
+        files = sorted(glob.glob(pattern))
+        if not files:
+            raise FileNotFoundError(
+                f"No champion models found matching: {pattern}\n"
+                "Run ml/binary_search.py first to train a champion model."
+            )
+        return files[-1]
+
+    def predict(self, df):
+        """
+        Predict BUY/NOT_BUY for the most recent data point.
+
+        Args:
+            df: OHLCV DataFrame with enough history for feature calculation.
+
+        Returns:
+            dict with keys: 'signal', 'probability', 'threshold', 'is_buy'
+            Returns None if features cannot be built from the data.
+        """
+        X, _ = self.feature_builder.build_features(df)
+
+        if len(X) == 0:
+            logging.warning("No features could be built from the provided data.")
+            return None
+
+        # Use most recent window, flatten to 2D for sklearn
+        latest = X[-1:].reshape(1, -1) if X[-1:].ndim > 2 else X[-1:]
+
+        latest_scaled = self.scaler.transform(latest)
+        proba = self.model.predict_proba(latest_scaled)[0, 1]
+
+        return {
+            'signal': 'BUY' if proba >= self.threshold else 'NOT_BUY',
+            'probability': float(proba),
+            'threshold': self.threshold,
+            'is_buy': proba >= self.threshold
+        }
+
+    def get_model_info(self):
+        """Return model metadata."""
+        return {
+            'params': self.params,
+            'threshold': self.threshold,
+            'precision': self.model_data.get('precision'),
+            'recall': self.model_data.get('recall'),
+            'f1': self.model_data.get('f1'),
+            'win_rate': self.model_data.get('win_rate'),
+            'model_path': self.model_path
+        }

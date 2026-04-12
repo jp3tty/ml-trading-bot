@@ -585,22 +585,26 @@ pip install scikit-learn xgboost pycatch22 pyarrow joblib pandas numpy
 - [x] Champion selection by F1 with precision/recall floors
 - [x] Save champion model with scaler and threshold
 
-### Phase 4: BUY Detector Integration 🔄
-- [ ] Create `ml/binary_predictor.py`
-- [ ] Update `ml_trader.py` to use binary predictor
-- [ ] Paper trade for validation
+### Phase 4: BUY Detector Integration ✅
+- [x] Create `ml/binary_predictor.py`
+- [x] Update `ml_trader.py` to use binary predictor
+- [x] Paper trade for validation (`paper_trade_validator.py`)
 
-### Phase 5: SELL Detector ⏳
-- [ ] Create `ml/binary_sell_feature_builder.py`
-- [ ] Create `ml/binary_sell_search.py`
+### Phase 5: SELL Detector 🔄
+- [x] Create `ml/binary_sell_feature_builder.py`
+- [x] Create `ml/binary_sell_search.py`
 - [ ] Train SELL detector (optimize for speed/sensitivity)
-- [ ] Create `ml/binary_sell_predictor.py`
-- [ ] Integrate with ml_trader.py
+- [x] Create `ml/binary_sell_predictor.py`
+- [x] Integrate with ml_trader.py
 
-### Phase 6: Full Integration ⏳
-- [ ] Combine BUY and SELL detectors in ml_trader.py
-- [ ] Implement position management logic
-- [ ] Paper trade complete system
+### Phase 6: Full Integration 🔄
+- [x] Combine BUY and SELL detectors in ml_trader.py
+- [x] Implement position management logic
+  - [x] `get_held_positions()` — fetch all open Alpaca positions once per run as `{symbol: position}`
+  - [x] Two-pass run loop: SELL pass over held positions first, then BUY pass over watchlist
+  - [x] BUY pass skips any symbol already held; SELL pass is independent of the watchlist
+  - [x] `paper_trade_validator.py` mirrors the same two-pass logic with per-side signal logging
+- [ ] Paper trade complete system (BUY + SELL together, pending SELL champion)
 - [ ] Build backtesting framework
 
 ### Phase 7: Refinement ⏳
@@ -826,26 +830,24 @@ df['rel_strength'] = df['close'].pct_change(20) - spy_df['close'].pct_change(20)
 
 ## Next Steps
 
-### Immediate (BUY Detector Integration)
-1. Create `ml/binary_predictor.py` to load and use champion model
-2. Update `ml_trader.py` to use binary predictor for BUY signals
-3. Paper trade to validate BUY detector performance
+### Immediate — Complete Phase 5
+1. Run `poetry run python ml/binary_sell_search.py --quick` to train the SELL champion
+2. Confirm `models/sell_search_results/champion_sell_*.pkl` is saved with recall ≥ 20%
+3. Run `paper_trade_validator.py --dry-run` on a live trading day to confirm both detectors fire
 
-### Short-term (SELL Detector)
-1. Design SELL detector labeling strategy (detect declining prices)
-2. Create `ml/binary_sell_feature_builder.py`
-3. Run hyperparameter search for SELL detector
-4. Integrate SELL detector with ml_trader.py
+### Short-term — Complete Phase 6
+1. Paper trade the full BUY + SELL system for several weeks
+2. Monitor `paper_trade_log/signals.csv` and open positions daily
+3. Build a simple backtesting framework against the existing parquet files
 
-### Medium-term (Optimization)
-1. Tune BUY detector for higher precision (target 58%+)
-2. Tune SELL detector for faster exits
-3. Add market context features (SPY trend, VIX, sector performance)
-4. Implement walk-forward validation
+### Medium-term — Phase 7 Refinement
+1. Tune BUY threshold if signal rate is too low (lower `min_precision` in search)
+2. Add market context features (SPY trend, VIX level, sector ETF performance)
+3. Implement walk-forward validation to check for overfitting over time
+4. Ensemble multiple BUY or SELL champion models
 
-### Long-term (Production)
-1. Build comprehensive backtesting framework
-2. Paper trade complete system for 1+ months
-3. Gradual live trading with small positions
-4. Monitor and retrain models periodically
+### Long-term — Production
+1. Paper trade for 1+ months with consistent positive P&L before going live
+2. Switch to live trading with small position sizes
+3. Schedule model retraining monthly as new data accumulates
 

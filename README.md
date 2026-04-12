@@ -1,154 +1,100 @@
 # Auto Trade - ML Stock Trading System
 
-Automated stock trading system combining technical analysis with machine learning. Scans stocks via FinViz, trains ML models on historical candlestick patterns, and executes trades through Alpaca.
+Automated stock trading system using separate binary ML models for entry and exit signal detection. Scans momentum stocks via FinViz, trains independent BUY and SELL detectors on historical candlestick data, and executes bracket orders through Alpaca's paper or live trading API.
 
-## Overview
+## Strategy
 
-This project has two modes of operation:
+**Early-exit short-term trading** using two independent binary classifiers:
 
-1. **Stock Scanner** (pattern path, `Streaming_Method/`) - Screens stocks using technical indicators and candlestick patterns
-2. **ML Trader** - Uses trained ML models to predict buy/sell signals and execute trades
+| Detector | Objective | Tuned For |
+|----------|-----------|-----------|
+| **BUY** | Identify high-probability entries | Precision — minimize false positives |
+| **SELL** | Detect early signs of decline | Recall — exit fast, miss fewer turns |
+
+The system defaults to **HOLD**. A position is only entered when the BUY detector fires with sufficient confidence, and only exited when the SELL detector triggers on a held position.
 
 ## Architecture
 
 ```
-┌─────────────────────────────────────────────────────────────────────────────────┐
-│                              DATA COLLECTION                                    │
-│  ┌──────────────────┐      ┌─────────────────┐      ┌─────────────────┐         │
-│  │  Alpaca API      │ ──▶  │  Historical     │ ──▶  │  Parquet Files  │         │
-│  │  (multi-symbol)  │      │  Collector      │      │  (per ticker)   │         │
-│  └──────────────────┘      └─────────────────┘      └─────────────────┘         │
-└─────────────────────────────────────────────────────────────────────────────────┘
-                                      │
-                                      ▼
-┌─────────────────────────────────────────────────────────────────────────────────┐
-│                              ML PIPELINE                                        │
-│  ┌──────────────────┐      ┌─────────────────┐      ┌─────────────────┐         │
-│  │  Feature Builder │ ──▶  │  Model Trainer  │ ──▶  │  Trained Model  │         │
-│  │  (indicators +   │      │  (ROCKET, RF,   │      │  (.pkl file)    │         │
-│  │   catch22)       │      │   XGBoost)      │      │                 │         │
-│  └──────────────────┘      └─────────────────┘      └─────────────────┘         │
-└─────────────────────────────────────────────────────────────────────────────────┘
-                                      │
-                                      ▼
-┌─────────────────────────────────────────────────────────────────────────────────┐
-│                              TRADING (CRON)                                     │
-│  ┌──────────────────┐      ┌─────────────────┐      ┌─────────────────┐         │
-│  │  ML Trader       │ ──▶  │  Predictions    │ ──▶  │  Alpaca Orders  │         │
-│  │  (scheduled)     │      │  (buy/sell/hold)│      │  (bracket)      │         │
-│  └──────────────────┘      └─────────────────┘      └─────────────────┘         │
-└─────────────────────────────────────────────────────────────────────────────────┘
+┌─────────────────────────────────────────────────────────────────────┐
+│                         DATA COLLECTION                             │
+│  Alpaca API  ──▶  HistoricalCollector  ──▶  Parquet (per ticker)   │
+└─────────────────────────────┬───────────────────────────────────────┘
+                              │
+                              ▼
+┌─────────────────────────────────────────────────────────────────────┐
+│                       FEATURE ENGINEERING                           │
+│  BinaryFeatureBuilder / BinarySellFeatureBuilder                    │
+│  Modes: catch22 (primary) · indicators · combined                  │
+└──────────────────┬──────────────────────────┬───────────────────────┘
+                   │                          │
+          ┌────────▼────────┐       ┌─────────▼───────┐
+          │  BUY Detector   │       │  SELL Detector  │
+          │  binary_search  │       │  sell_search    │
+          │  XGBoost / RF   │       │  XGBoost / RF   │
+          └────────┬────────┘       └─────────┬───────┘
+                   │                          │
+                   └────────────┬─────────────┘
+                                │
+               ┌────────────────▼────────────────┐
+               │           ML Trader             │
+               │   Pass 1: SELL all held tickers │
+               │   Pass 2: BUY watchlist tickers │
+               └────────────────┬────────────────┘
+                                │
+                       Alpaca bracket orders
 ```
 
 ## Project Structure
 
 ```
-auto_trade/
-├── alpaca_trading.py           # Alpaca REST client (ML + data collection)
-├── Streaming_Method/           # Pattern scanner, streaming bars, legacy IBKR
-│   ├── scanner.py              # FinViz technical scan CLI
-│   ├── streaming_alpaca.py     # Real-time bars + hammer trades
-│   └── pattern_exits.py        # Rule-based exits (optional)
-├── ml_trader.py                # ML-based trading (cron job)
-├── techAnalysis.py             # Technical indicators & patterns (shared)
+ml-trading-bot/
+├── alpaca_trading.py                    # Alpaca REST client
+├── ml_trader.py                         # Main trading orchestrator (cron job)
+├── paper_trade_validator.py             # Paper trading validation + signal log
+├── techAnalysis.py                      # RSI, momentum, candlestick patterns
 ├── data_collection/
-│   ├── __init__.py
-│   └── historical_collector.py # Bulk historical data fetching
+│   ├── historical_collector.py          # Bulk daily data fetching
+│   └── historical_collector_4h.py       # 4-hour data fetching
 ├── ml/
-│   ├── __init__.py
-│   ├── feature_builder.py      # Candlestick → ML features (indicators + catch22)
-│   ├── trainer.py              # ROCKET model training
-│   ├── predictor.py            # Live inference
-│   ├── hyperparameter_search.py # Grid search for ROCKET
-│   └── catch22_search.py       # Grid search comparing ROCKET vs catch22
+│   ├── binary_feature_builder.py        # BUY features (catch22 / indicators)
+│   ├── binary_sell_feature_builder.py   # SELL features (inverted labels)
+│   ├── binary_search.py                 # BUY hyperparameter grid search
+│   ├── binary_sell_search.py            # SELL hyperparameter grid search
+│   ├── binary_predictor.py              # BUY detector — live inference
+│   ├── binary_sell_predictor.py         # SELL detector — live inference
+│   ├── feature_builder.py               # (legacy — 3-class)
+│   ├── predictor.py                     # (legacy — 3-class)
+│   └── trainer.py                       # (legacy — ROCKET)
 ├── models/
-│   ├── search_results/         # ROCKET hyperparameter search results
-│   └── catch22_results/        # catch22 comparison results
+│   ├── binary_search_results/           # BUY champion models + search CSVs
+│   └── sell_search_results/             # SELL champion models + search CSVs
+├── paper_trade_log/
+│   ├── signals.csv                      # All BUY/SELL signals logged per run
+│   └── orders.csv                       # All orders placed (paper or live)
 ├── saved_data/
-│   ├── historical/             # Parquet files (per ticker)
-│   ├── FinVizData.csv
-│   └── scan_results.csv
+│   ├── historical/                      # Daily parquet files
+│   └── historical_4h/                   # 4-hour parquet files
 ├── stock_picker/
-│   └── stock_screener.py       # FinViz scraper
-├── notebooks/
-│   └── eda.ipynb               # Exploratory analysis
-├── ML_TRADING_PLAN.md          # ML implementation roadmap
+│   └── stock_screener.py                # FinViz momentum screener
+├── Streaming_Method/                    # Legacy pattern scanner
+├── ML_TRADING_PLAN.md                   # Implementation roadmap
 ├── pyproject.toml
 └── README.md
 ```
-
-## Components
-
-| File | Description |
-|------|-------------|
-| `alpaca_trading.py` | Alpaca REST wrapper used by ML trader and data collectors |
-| `Streaming_Method/scanner.py` | FinViz-driven technical scan → `saved_data/scan_results.csv` |
-| `Streaming_Method/streaming_alpaca.py` | WebSocket bars + pattern-based bracket orders |
-| `ml_trader.py` | Cron-based ML trader. Fetches data, predicts, executes trades |
-| `techAnalysis.py` | Technical analysis: RSI, momentum, candlestick patterns |
-| `data_collection/historical_collector.py` | Bulk fetch 2+ years of data for ML training |
-| `ml/feature_builder.py` | Converts OHLCV + indicators + catch22 into ML features |
-| `ml/trainer.py` | Trains ROCKET time series classifier |
-| `ml/predictor.py` | Loads trained model for live predictions |
-| `ml/hyperparameter_search.py` | Grid search for ROCKET hyperparameters |
-| `ml/catch22_search.py` | Compares ROCKET vs catch22 with RF/XGBoost |
-| `stock_picker/stock_screener.py` | Scrapes FinViz for momentum stocks |
-
-## Technical Indicators
-
-### Momentum Indicators
-- **RSI** (14-period) - Relative Strength Index
-- **Momentum** - 10-period price momentum
-- **SMA 20/50** - Simple moving averages
-- **Bullish/Bearish Momentum** - Composite trend signal
-
-### Candlestick Patterns
-- **Hammer/Inverted Hammer** - Reversal patterns
-- **Doji** (standard, dragonfly, gravestone, long-legged) - Indecision patterns
-- **Engulfing** (bullish/bearish) - Reversal patterns
-
-## Feature Modes
-
-The feature builder supports three modes:
-
-| Mode | Features | Use Case |
-|------|----------|----------|
-| `indicators` | RSI, momentum, hammer, doji, engulfing (9 features × window) | Time series with ROCKET |
-| `catch22` | 22 canonical time series features for close + volume (44 total) | Tabular ML (RF, XGBoost) |
-| `combined` | Flattened indicators + catch22 | Best of both worlds |
-
-## ML Models
-
-### Time Series Classifiers (aeon)
-
-| Model | Description | Speed |
-|-------|-------------|-------|
-| RocketClassifier | Convolution-based, excellent accuracy | Fast |
-| MiniRocket | Lightweight ROCKET variant | Very Fast |
-
-### Tabular Classifiers (for catch22/combined)
-
-| Model | Description | Best For |
-|-------|-------------|----------|
-| Random Forest | Ensemble of decision trees | Interpretability |
-| XGBoost | Gradient boosted trees | Accuracy |
 
 ## Setup
 
 ### Prerequisites
 - Python 3.12
 - Alpaca account (paper or live)
-- Poetry (dependency management)
-- Microsoft C++ Build Tools (for pycatch22 on Windows)
+- Poetry
 
 ### Installation
 
 ```bash
-# Clone the repository
 git clone https://github.com/jp3tty/ml-trading-bot.git
 cd ml-trading-bot
-
-# Install dependencies with Poetry
 pip install poetry
 poetry install
 ```
@@ -164,72 +110,75 @@ ALPACA_SECRET_KEY=your_secret_key_here
 
 ## Usage
 
-### 1. Stock Scanner (Technical Analysis)
+### 1. Collect Historical Data
 
 ```bash
-# Run the scanner - outputs to saved_data/scan_results.csv
-poetry run python -m Streaming_Method.scanner
-```
-
-### 2. Collect Historical Data (ML Training)
-
-```bash
-# Fetch 2 years of daily data for 500+ stocks
+# Daily bars (used for live inference)
 poetry run python data_collection/historical_collector.py
+
+# 4-hour bars (used for model training)
+poetry run python data_collection/historical_collector_4h.py
 ```
 
-### 3. Train ML Model
+### 2. Train the BUY Detector
 
 ```bash
-# Train ROCKET classifier directly
-poetry run python ml/trainer.py
+# Quick search (~30 min)
+poetry run python ml/binary_search.py --quick
+
+# Full grid search (~2-4 hours)
+poetry run python ml/binary_search.py
 ```
 
-Or in Python:
+Champion model saved to `models/binary_search_results/champion_binary_<timestamp>.pkl`.
 
-```python
-from ml.feature_builder import FeatureBuilder
-from ml.trainer import TradingModelTrainer
-
-feature_builder = FeatureBuilder(window_size=20, horizon=5)
-trainer = TradingModelTrainer()
-
-X, y = trainer.prepare_dataset("saved_data/historical", feature_builder)
-model = trainer.train(X, y, model_type='rocket')
-trainer.save_model("models/rocket_trading_model.pkl")
-```
-
-### 4. Hyperparameter Search
-
-#### ROCKET Search
-```bash
-# Find best ROCKET parameters
-poetry run python ml/hyperparameter_search.py
-```
-
-#### catch22 Comparison Search
-```bash
-# Quick search (fewer combinations, ~5-10 min)
-poetry run python ml/catch22_search.py --quick
-
-# Full search (~1-2 hours)
-poetry run python ml/catch22_search.py
-```
-
-### 5. ML Trader (Automated Trading)
+### 3. Train the SELL Detector
 
 ```bash
-# Dry run - preview without trading
+# Quick search
+poetry run python ml/binary_sell_search.py --quick
+
+# Full grid search
+poetry run python ml/binary_sell_search.py
+```
+
+Champion model saved to `models/sell_search_results/champion_sell_<timestamp>.pkl`.
+
+### 4. Validate with Paper Trading
+
+```bash
+# Dry run — scan signals without placing orders
+poetry run python paper_trade_validator.py --dry-run
+
+# Live paper trading — places real bracket orders on Alpaca paper account
+poetry run python paper_trade_validator.py
+
+# View cumulative signal log summary
+poetry run python paper_trade_validator.py --report
+
+# Scan specific symbols
+poetry run python paper_trade_validator.py --dry-run --symbols AAPL TSLA NVDA
+```
+
+### 5. Run the ML Trader
+
+```bash
+# Dry run
 poetry run python ml_trader.py --dry-run
 
-# Test with specific symbols
-poetry run python ml_trader.py --dry-run --symbols AAPL MSFT GOOGL
+# Paper trading (default)
+poetry run python ml_trader.py
 
-# Paper trading with 70% confidence threshold
+# Specify confidence threshold
 poetry run python ml_trader.py --confidence 0.7
 
-# Live trading (use with caution!)
+# Live trading
 poetry run python ml_trader.py --live
+
+# Use specific model files
+poetry run python ml_trader.py \
+  --model models/binary_search_results/champion_binary_20260114_113724.pkl \
+  --sell-model models/sell_search_results/champion_sell_<timestamp>.pkl
 ```
 
 #### ML Trader Options
@@ -237,91 +186,79 @@ poetry run python ml_trader.py --live
 | Flag | Description |
 |------|-------------|
 | `--dry-run` | Preview trades without executing |
-| `--symbols` | Specific tickers to analyze |
-| `--confidence` | Min ML confidence threshold (default: 0.6) |
-| `--model` | Path to trained model (default: models/rocket_trading_model.pkl) |
+| `--symbols` | Specific tickers to scan for BUY signals |
+| `--confidence` | Min BUY confidence threshold (default: 0.6) |
+| `--model` | Path to BUY champion `.pkl` (default: latest) |
+| `--sell-model` | Path to SELL champion `.pkl` (default: latest) |
 | `--live` | Use live trading instead of paper |
 
-## Hyperparameters
+## Trading Loop
 
-### Feature Engineering
+Each run executes two passes:
 
-| Parameter | Values | Description |
-|-----------|--------|-------------|
-| `window_size` | 10, 20, 30 | Days of history model sees |
-| `horizon` | 3, 5, 7 | Days ahead to predict |
-| `label_threshold` | 0.01, 0.02, 0.03 | % threshold for BUY/SELL |
-| `feature_mode` | indicators, catch22, combined | Which features to use |
+**Pass 1 — SELL** (held positions from Alpaca):
+- Fetches all open positions once via `get_held_positions()`
+- Runs SELL detector on every held ticker
+- Closes position if SELL signal fires
+- Independent of the FinViz watchlist — held tickers are never missed
 
-### Model Parameters
+**Pass 2 — BUY** (FinViz watchlist):
+- Fetches momentum stocks from FinViz screener
+- Skips any ticker already held
+- Runs BUY detector; places bracket order if signal fires above confidence threshold
 
-| Parameter | Values | Description |
-|-----------|--------|-------------|
-| `n_kernels` | 1000-10000 | ROCKET kernel count |
-| `n_estimators` | 100, 200 | Trees in RF/XGBoost |
-| `max_depth` | 5, 10, None | Tree depth |
+## Models
 
-## GitHub Actions
+### BUY Detector (Current Champion)
 
-### Stock Scanner Schedule
+| Parameter | Value |
+|-----------|-------|
+| Classifier | XGBoost |
+| Window size | 40 bars |
+| Horizon | 9 bars |
+| Buy threshold | 1.5% |
+| Decision threshold | 0.826 |
+| Precision | 58.6% |
+| Feature mode | catch22 |
 
-| Schedule | Time (ET) | Description |
-|----------|-----------|-------------|
-| `30 14 * * 1-5` | 9:30 AM | Market open scan |
-| `30 18 * * 1-5` | 1:30 PM | Mid-day scan |
+### SELL Detector
 
-### ML Trader Schedule
+Optimised for recall (fast exits). Champion selection requires `recall ≥ 20%` and `precision ≥ 40%`, ranked by F1. Train with `ml/binary_sell_search.py`.
 
-| Schedule | Time (ET) | Description |
-|----------|-----------|-------------|
-| `0 14-21 * * 1-5` | 9AM-4PM | Hourly during market hours |
+### Feature Modes
 
-### Required Secrets
+| Mode | Description | Features |
+|------|-------------|----------|
+| `catch22` | 22 canonical time series statistics on close + volume | 44 total |
+| `indicators` | RSI, momentum, hammer, doji, engulfing, volatility | 11 × window |
+| `combined` | Flattened indicators + catch22 | 11×window + 22 |
 
-Add these secrets to your GitHub repository:
-- `ALPACA_API_KEY`
-- `ALPACA_SECRET_KEY`
+### Champion Selection
 
-### Manual Trigger
-
-Both workflows support `workflow_dispatch` for manual triggering from the GitHub Actions tab.
+**BUY**: `precision ≥ 50%` and `recall ≥ 10%` → ranked by F1
+**SELL**: `recall ≥ 20%` and `precision ≥ 40%` → ranked by F1
 
 ## Output Files
 
 | File | Description |
 |------|-------------|
-| `saved_data/scan_results.csv` | Scanner results table |
-| `saved_data/historical/*.parquet` | Historical OHLCV data per ticker |
-| `models/*.pkl` | Trained ML models |
-| `models/search_results/*.csv` | ROCKET hyperparameter search results |
-| `models/catch22_results/*.csv` | catch22 comparison results |
-
-## Scanner Results Table
-
-| Column | Description |
-|--------|-------------|
-| `Ticker` | Stock symbol |
-| `Latest Price` | Latest closing price |
-| `Engulfing Signal` | Latest engulfing pattern (bullish/bearish/neutral) |
-| `Momentum Trend` | Composite momentum (Bullish/Bearish/Neutral) |
-| `Hammer Signal` | Count of hammer patterns in last 5 days |
-| `Doji Signal` | Type of latest doji pattern |
+| `paper_trade_log/signals.csv` | Every BUY/SELL signal scored per run |
+| `paper_trade_log/orders.csv` | Every order placed with entry/TP/SL |
+| `models/binary_search_results/` | BUY champion `.pkl` + search results `.csv` |
+| `models/sell_search_results/` | SELL champion `.pkl` + search results `.csv` |
+| `saved_data/historical_4h/*.parquet` | 4-hour OHLCV data per ticker |
 
 ## FinViz Screening Criteria
 
-Default filters (configurable in `stock_screener.py`):
+Default filters (configurable in `stock_picker/stock_screener.py`):
 - Market cap: Small cap and over
-- Relative volume: Over 2x average
+- Relative volume: Over 2× average
 - Performance: Up over 5 days
-- Sorted by: Market cap (descending)
+- Sorted by: Market cap descending
 
 ## Development Roadmap
 
-See [ML_TRADING_PLAN.md](ML_TRADING_PLAN.md) for the detailed ML implementation plan including:
-- Data collection strategy
-- Feature engineering approach
-- Model training workflow
-- Live integration steps
+See [ML_TRADING_PLAN.md](ML_TRADING_PLAN.md) for the full implementation plan and phase checklist.
 
 ## License
 
