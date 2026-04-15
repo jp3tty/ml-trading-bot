@@ -590,10 +590,13 @@ pip install scikit-learn xgboost pycatch22 pyarrow joblib pandas numpy
 - [x] Update `ml_trader.py` to use binary predictor
 - [x] Paper trade for validation (`paper_trade_validator.py`)
 
-### Phase 5: SELL Detector 🔄
+### Phase 5: SELL Detector ✅
 - [x] Create `ml/binary_sell_feature_builder.py`
 - [x] Create `ml/binary_sell_search.py`
-- [ ] Train SELL detector (optimize for speed/sensitivity)
+  - Fixed import fallback (`try ml.binary_sell_feature_builder / except binary_sell_feature_builder`)
+  - Added `--max-files` CLI flag to limit parquet files per combination
+  - Refactored `run_search()` to cache feature builds per data config — reduced 6-hour run to ~15 min
+- [x] Train SELL detector — champion: XGBoost, window=20, horizon=5, sell_thresh=0.5%, precision=40.1%, recall=100%, F1=0.573
 - [x] Create `ml/binary_sell_predictor.py`
 - [x] Integrate with ml_trader.py
 
@@ -604,7 +607,9 @@ pip install scikit-learn xgboost pycatch22 pyarrow joblib pandas numpy
   - [x] Two-pass run loop: SELL pass over held positions first, then BUY pass over watchlist
   - [x] BUY pass skips any symbol already held; SELL pass is independent of the watchlist
   - [x] `paper_trade_validator.py` mirrors the same two-pass logic with per-side signal logging
-- [ ] Paper trade complete system (BUY + SELL together, pending SELL champion)
+- [x] Dry run confirmed — both detectors load and scan without errors (2026-04-15)
+- [ ] **BUY threshold issue** — current champion threshold (0.826) is too conservative; no BUY signals fire in live scans. Options: re-train with lower `min_precision`, or manually lower threshold for paper testing
+- [ ] Paper trade complete system (BUY + SELL together) — blocked on BUY threshold fix
 - [ ] Build backtesting framework
 
 ### Phase 7: Refinement ⏳
@@ -830,21 +835,33 @@ df['rel_strength'] = df['close'].pct_change(20) - spy_df['close'].pct_change(20)
 
 ## Next Steps
 
-### Immediate — Complete Phase 5
-1. Run `poetry run python ml/binary_sell_search.py --quick` to train the SELL champion
-2. Confirm `models/sell_search_results/champion_sell_*.pkl` is saved with recall ≥ 20%
-3. Run `paper_trade_validator.py --dry-run` on a live trading day to confirm both detectors fire
+### Immediate — Unblock BUY Signals (Phase 6)
+Current BUY champion threshold is 0.826 but live scan probabilities top out ~0.82 — no signals fire.
+Two options (pick one):
+
+**Option A — Re-train BUY with relaxed precision floor (recommended)**
+```bash
+# Lower min_precision from 0.58 → 0.45 in binary_search.py quick search space, then:
+poetry run python ml/binary_search.py --quick --max-files 60
+```
+
+**Option B — Manual threshold test (faster, less principled)**
+```python
+# In binary_predictor.py or ml_trader.py, override threshold temporarily:
+predictor.threshold = 0.70
+```
 
 ### Short-term — Complete Phase 6
-1. Paper trade the full BUY + SELL system for several weeks
-2. Monitor `paper_trade_log/signals.csv` and open positions daily
-3. Build a simple backtesting framework against the existing parquet files
+1. Resolve BUY threshold issue (see above)
+2. Paper trade the full BUY + SELL system for several weeks
+3. Monitor `paper_trade_log/signals.csv` and open positions daily
+4. Build a simple backtesting framework against the existing parquet files
 
 ### Medium-term — Phase 7 Refinement
-1. Tune BUY threshold if signal rate is too low (lower `min_precision` in search)
-2. Add market context features (SPY trend, VIX level, sector ETF performance)
-3. Implement walk-forward validation to check for overfitting over time
-4. Ensemble multiple BUY or SELL champion models
+1. Add market context features (SPY trend, VIX level, sector ETF performance)
+2. Implement walk-forward validation to check for overfitting over time
+3. Ensemble multiple BUY or SELL champion models
+4. Evaluate lowering SELL `sell_threshold` from 0.5% — may be too hair-trigger for real trading
 
 ### Long-term — Production
 1. Paper trade for 1+ months with consistent positive P&L before going live

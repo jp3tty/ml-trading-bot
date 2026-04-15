@@ -135,14 +135,17 @@ Champion model saved to `models/binary_search_results/champion_binary_<timestamp
 ### 3. Train the SELL Detector
 
 ```bash
-# Quick search
-poetry run python ml/binary_sell_search.py --quick
+# Quick search — use --max-files to limit data loaded per combination (recommended)
+poetry run python ml/binary_sell_search.py --quick --max-files 60
 
 # Full grid search
-poetry run python ml/binary_sell_search.py
+poetry run python ml/binary_sell_search.py --max-files 60
 ```
 
 Champion model saved to `models/sell_search_results/champion_sell_<timestamp>.pkl`.
+
+> **Note:** Without `--max-files`, the search loads all 400+ parquet files per combination
+> and can take many hours. 60 files gives a representative sample and completes in ~15 min.
 
 ### 4. Validate with Paper Trading
 
@@ -221,9 +224,21 @@ Each run executes two passes:
 | Precision | 58.6% |
 | Feature mode | catch22 |
 
-### SELL Detector
+### SELL Detector (Current Champion)
 
-Optimised for recall (fast exits). Champion selection requires `recall ≥ 20%` and `precision ≥ 40%`, ranked by F1. Train with `ml/binary_sell_search.py`.
+| Parameter | Value |
+|-----------|-------|
+| Classifier | XGBoost |
+| Window size | 20 bars |
+| Horizon | 5 bars |
+| Sell threshold | 0.5% |
+| Decision threshold | 0.040 |
+| Precision | 40.1% |
+| Recall | 100.0% |
+| F1 | 0.573 |
+| Feature mode | catch22 |
+
+Optimised for recall (fast exits). Champion selection requires `recall ≥ 20%` and `precision ≥ 40%`, ranked by F1.
 
 ### Feature Modes
 
@@ -255,6 +270,22 @@ Default filters (configurable in `stock_picker/stock_screener.py`):
 - Relative volume: Over 2× average
 - Performance: Up over 5 days
 - Sorted by: Market cap descending
+
+## Current Status
+
+| Phase | Description | Status |
+|-------|-------------|--------|
+| 1 | Data collection (daily + 4h parquet) | ✅ Complete |
+| 2 | Feature engineering (catch22 + indicators) | ✅ Complete |
+| 3 | BUY detector training + champion selection | ✅ Complete |
+| 4 | BUY detector integrated into trading loop | ✅ Complete |
+| 5 | SELL detector training + champion selection | ✅ Complete |
+| 6 | Full BUY + SELL integration + paper trading | 🔄 In progress |
+| 7 | Refinement (ensemble, market context, walk-forward) | ⏳ Planned |
+
+**Known issue:** The current BUY champion threshold (0.826) is too conservative — all scanned
+symbols score in the 0.63–0.82 range and no BUY signals fire. Next step is to re-train the BUY
+detector with a relaxed `min_precision` floor or manually lower the threshold for paper testing.
 
 ## Development Roadmap
 

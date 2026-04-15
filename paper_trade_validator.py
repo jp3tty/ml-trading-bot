@@ -164,7 +164,7 @@ def print_report():
 
     for side in ['BUY', 'SELL']:
         side_df = df[df['side'] == side] if 'side' in df.columns else df
-        fired   = side_df['signal_fired'].sum() if len(side_df) else 0
+        fired   = side_df['signal_fired'].map(lambda v: str(v).strip().lower() == 'true').sum() if len(side_df) else 0
         acted   = (side_df['action_taken'].isin([f'{side}_ORDER', f'DRY_RUN_{side}'])).sum()
         if len(side_df) == 0:
             continue
@@ -173,7 +173,7 @@ def print_report():
         print(f"    Fired:          {fired}  ({fired/len(side_df)*100:.1f}%)")
         print(f"    Orders placed:  {acted}")
         if fired > 0:
-            fired_rows = side_df[side_df['signal_fired'].astype(bool)]
+            fired_rows = side_df[side_df['signal_fired'].map(lambda v: str(v).strip().lower() == 'true')]
             print(f"    Avg prob:       {fired_rows['probability'].mean():.4f}")
             top = fired_rows['symbol'].value_counts().head(5)
             print(f"    Top symbols:    {', '.join(f'{s}({c})' for s, c in top.items())}")

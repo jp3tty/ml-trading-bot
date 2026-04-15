@@ -85,7 +85,10 @@ class SellHyperparameterSearch:
 
     def load_data(self, window_size, horizon, sell_threshold, max_files=None):
         """Load and build SELL features with given parameters."""
-        from ml.binary_sell_feature_builder import BinarySellFeatureBuilder
+        try:
+            from ml.binary_sell_feature_builder import BinarySellFeatureBuilder
+        except ImportError:
+            from binary_sell_feature_builder import BinarySellFeatureBuilder
 
         fb = BinarySellFeatureBuilder(
             window_size=window_size,
@@ -190,7 +193,8 @@ class SellHyperparameterSearch:
             X, y = self.load_data(
                 window_size=params['window_size'],
                 horizon=params['horizon'],
-                sell_threshold=params['sell_threshold']
+                sell_threshold=params['sell_threshold'],
+                max_files=params.get('max_files')
             )
 
             if X is None or len(X) < 1000:
@@ -308,7 +312,7 @@ class SellHyperparameterSearch:
 
         return combinations
 
-    def run_search(self, quick=False):
+    def run_search(self, quick=False, max_files=None):
         search_space = (self.define_quick_search_space() if quick
                         else self.define_search_space())
         combinations = self.generate_combinations(search_space)
@@ -318,11 +322,142 @@ class SellHyperparameterSearch:
             f"with {len(combinations)} combinations"
         )
 
-        for i, params in enumerate(combinations):
-            logging.info(f"\n=== Combination {i+1}/{len(combinations)} ===")
-            result = self.evaluate_params(params)
-            if result:
-                self.results.append(result)
+        # Group combinations by data config (window, horizon, sell_threshold)
+        # so we only load + build features once per unique data config.
+        from itertools import groupby
+        data_keys = ('window_size', 'horizon', 'sell_threshold')
+        sorted_combos = sorted(combinations, key=lambda c: tuple(c[k] for k in data_keys))
+
+        total = len(sorted_combos)
+        done  = 0
+
+        for data_cfg, group in groupby(sorted_combos, key=lambda c: tuple(c[k] for k in data_keys)):
+            window_size, horizon, sell_threshold = data_cfg
+
+            logging.info(
+                f"\n--- Loading data: window={window_size}, "
+                f"horizon={horizon}, sell_thresh={sell_threshold} ---"
+            )
+            X, y = self.load_data(
+                window_size=window_size,
+                horizon=horizon,
+                sell_threshold=sell_threshold,
+                max_files=max_files,
+            )
+
+            if X is None or len(X) < 1000:
+                logging.warning("Insufficient data for this config — skipping")
+                group_list = list(group)
+                done += len(group_list)
+                continue
+
+            sell_count = int(sum(y))
+            if sell_count < 50:
+                logging.warning(f"Too few SELL samples ({sell_count}) — skipping")
+                group_list = list(group)
+                done += len(group_list)
+                continue
+
+            # Temporal split once per data config
+            from sklearn.model_selection import train_test_split
+            X_train, X_test, y_train, y_test = train_test_split(
+                X, y, test_size=0.2, shuffle=False
+            )
+            from sklearn.preprocessing import StandardScaler
+            scaler  = StandardScaler()
+            X_train = scaler.fit_transform(X_train)
+            X_test  = scaler.transform(X_test)
+
+            for params in group:
+                done += 1
+                logging.info(f"\n=== Combination {done}/{total} ===")
+                logging.info(
+                    f"Testing: window={params['window_size']}, horizon={params['horizon']}, "
+                    f"sell_thresh={params['sell_threshold']}, clf={params['classifier']}, "
+                    f"n_est={params['n_estimators']}, depth={params['max_depth']}, "
+                    f"min_recall={params['min_recall']}"
+                )
+
+                try:
+                    model = self.get_classifier(
+                        params['classifier'],
+                        params['n_estimators'],
+                        params['max_depth'],
+                    )
+                    model.fit(X_train, y_train)
+                    y_proba = model.predict_proba(X_test)[:, 1]
+
+                    threshold, met_recall = self.find_optimal_threshold(
+                        y_test, y_proba, params['min_recall']
+                    )
+                    y_pred = (y_proba >= threshold).astype(int)
+
+                    from sklearn.metrics import (
+                        accuracy_score, precision_score, recall_score,
+                        f1_score, roc_auc_score, average_precision_score,
+                        confusion_matrix,
+                    )
+                    accuracy  = accuracy_score(y_test, y_pred)
+                    precision = precision_score(y_test, y_pred, zero_division=0)
+                    recall    = recall_score(y_test, y_pred, zero_division=0)
+                    f1        = f1_score(y_test, y_pred, zero_division=0)
+
+                    try:
+                        roc_auc = roc_auc_score(y_test, y_proba)
+                        pr_auc  = average_precision_score(y_test, y_proba)
+                    except Exception:
+                        roc_auc = 0
+                        pr_auc  = 0
+
+                    cm = confusion_matrix(y_test, y_pred)
+                    true_positives  = cm[1, 1] if cm.shape[0] > 1 else 0
+                    false_positives = cm[0, 1] if cm.shape[0] > 1 else 0
+
+                    result = {
+                        **params,
+                        'threshold':        threshold,
+                        'met_recall_req':   met_recall,
+                        'accuracy':         accuracy,
+                        'precision':        precision,
+                        'recall':           recall,
+                        'f1':               f1,
+                        'roc_auc':          roc_auc,
+                        'pr_auc':           pr_auc,
+                        'true_positives':   true_positives,
+                        'false_positives':  false_positives,
+                        'total_samples':    len(X),
+                        'sell_samples':     sell_count,
+                        'sell_pct':         sell_count / len(y) * 100,
+                    }
+
+                    logging.info(
+                        f"  Precision: {precision:.3f}, Recall: {recall:.3f}, F1: {f1:.3f}"
+                    )
+
+                    if recall >= 0.2 and precision >= 0.4:
+                        score = f1
+                        if score > self.champion_score:
+                            self.champion_score = score
+                            self.champion = {
+                                'params':    params,
+                                'model':     model,
+                                'scaler':    scaler,
+                                'threshold': threshold,
+                                'precision': precision,
+                                'recall':    recall,
+                                'f1':        f1,
+                            }
+                            logging.info(
+                                f"  *** NEW CHAMPION! "
+                                f"Precision: {precision:.1%}, Recall: {recall:.1%} ***"
+                            )
+
+                    self.results.append(result)
+
+                except Exception as e:
+                    logging.error(f"Error evaluating params: {e}")
+                    import traceback
+                    traceback.print_exc()
 
         self.save_results()
         self.print_summary()
@@ -422,10 +557,12 @@ if __name__ == "__main__":
                         help='Data directory')
     parser.add_argument('--results-dir', default='models/sell_search_results',
                         help='Results directory')
+    parser.add_argument('--max-files', type=int, default=None,
+                        help='Limit number of parquet files loaded per combination')
     args = parser.parse_args()
 
     search = SellHyperparameterSearch(
         data_dir=args.data_dir,
         results_dir=args.results_dir
     )
-    search.run_search(quick=args.quick)
+    search.run_search(quick=args.quick, max_files=args.max_files)
