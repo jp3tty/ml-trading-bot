@@ -55,7 +55,7 @@ class BinaryHyperparameterSearch:
             # Feature Builder parameters
             'window_size': [10, 15, 20, 30],
             'horizon': [3, 6, 12],
-            'buy_threshold': [0.01, 0.015, 0.02, 0.025],
+            'buy_threshold': [0.002, 0.003, 0.004, 0.005],
             
             # Classifier parameters
             'classifier': ['random_forest', 'xgboost'],
@@ -63,7 +63,7 @@ class BinaryHyperparameterSearch:
             'max_depth': [5, 10, None],
             
             # Threshold optimization
-            'min_precision': [0.5, 0.6],
+            'min_precision': [0.52, 0.55],
         }
     
     def define_quick_search_space(self):
@@ -75,7 +75,7 @@ class BinaryHyperparameterSearch:
             'classifier': ['random_forest'],         # Can be 'random_forest' or 'xgboost'
             'n_estimators': [100, 150],
             'max_depth': [8, 10, 12],                # Tree depths
-            'min_precision': [0.52, 0.55],
+            'min_precision': [0.45, 0.50],
         }
     
     def load_data(self, window_size, horizon, buy_threshold, max_files=None):
@@ -305,22 +305,127 @@ class BinaryHyperparameterSearch:
         
         return combinations
     
-    def run_search(self, quick=False):
+    def run_search(self, quick=False, max_files=None):
         """Run grid search"""
         search_space = self.define_quick_search_space() if quick else self.define_search_space()
         combinations = self.generate_combinations(search_space)
-        
+
         logging.info(f"Running {'quick ' if quick else ''}search with {len(combinations)} combinations")
-        
-        for i, params in enumerate(combinations):
-            logging.info(f"\n=== Combination {i+1}/{len(combinations)} ===")
-            result = self.evaluate_params(params)
-            if result:
-                self.results.append(result)
-        
+
+        # Group by data config so features are built once per unique (window, horizon, threshold)
+        from itertools import groupby
+        data_keys = ('window_size', 'horizon', 'buy_threshold')
+        sorted_combos = sorted(combinations, key=lambda c: tuple(c[k] for k in data_keys))
+
+        total = len(sorted_combos)
+        done = 0
+
+        for data_cfg, group in groupby(sorted_combos, key=lambda c: tuple(c[k] for k in data_keys)):
+            window_size, horizon, buy_threshold = data_cfg
+
+            logging.info(f"\n--- Loading data: window={window_size}, horizon={horizon}, buy_thresh={buy_threshold} ---")
+            X, y = self.load_data(window_size=window_size, horizon=horizon,
+                                  buy_threshold=buy_threshold, max_files=max_files)
+
+            if X is None or len(X) < 1000:
+                logging.warning("Insufficient data for this config — skipping")
+                done += len(list(group))
+                continue
+
+            buy_count = int(sum(y))
+            if buy_count < 50:
+                logging.warning(f"Too few BUY samples ({buy_count}) — skipping")
+                done += len(list(group))
+                continue
+
+            X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, shuffle=False)
+            scaler = StandardScaler()
+            X_train = scaler.fit_transform(X_train)
+            X_test = scaler.transform(X_test)
+
+            for params in group:
+                done += 1
+                logging.info(f"\n=== Combination {done}/{total} ===")
+                logging.info(
+                    f"Testing: window={params['window_size']}, horizon={params['horizon']}, "
+                    f"buy_thresh={params['buy_threshold']}, clf={params['classifier']}, "
+                    f"n_est={params['n_estimators']}, depth={params['max_depth']}, "
+                    f"min_prec={params['min_precision']}"
+                )
+
+                try:
+                    model = self.get_classifier(params['classifier'], params['n_estimators'], params['max_depth'])
+                    model.fit(X_train, y_train)
+                    y_proba = model.predict_proba(X_test)[:, 1]
+
+                    threshold, met_precision = self.find_optimal_threshold(y_test, y_proba, params['min_precision'])
+                    y_pred = (y_proba >= threshold).astype(int)
+
+                    accuracy  = accuracy_score(y_test, y_pred)
+                    precision = precision_score(y_test, y_pred, zero_division=0)
+                    recall    = recall_score(y_test, y_pred, zero_division=0)
+                    f1        = f1_score(y_test, y_pred, zero_division=0)
+
+                    try:
+                        roc_auc = roc_auc_score(y_test, y_proba)
+                        pr_auc  = average_precision_score(y_test, y_proba)
+                    except Exception:
+                        roc_auc = 0
+                        pr_auc  = 0
+
+                    cm = confusion_matrix(y_test, y_pred)
+                    true_positives  = cm[1, 1] if cm.shape[0] > 1 else 0
+                    false_positives = cm[0, 1] if cm.shape[0] > 1 else 0
+                    win_rate = (true_positives / (true_positives + false_positives)
+                                if true_positives + false_positives > 0 else 0)
+
+                    result = {
+                        **params,
+                        'threshold':         threshold,
+                        'met_precision_req': met_precision,
+                        'accuracy':          accuracy,
+                        'precision':         precision,
+                        'recall':            recall,
+                        'f1':                f1,
+                        'roc_auc':           roc_auc,
+                        'pr_auc':            pr_auc,
+                        'win_rate':          win_rate,
+                        'true_positives':    true_positives,
+                        'false_positives':   false_positives,
+                        'total_samples':     len(X),
+                        'buy_samples':       buy_count,
+                        'buy_pct':           buy_count / len(y) * 100,
+                    }
+
+                    logging.info(f"  Precision: {precision:.3f}, Recall: {recall:.3f}, "
+                                 f"F1: {f1:.3f}, Win Rate: {win_rate:.1%}")
+
+                    if precision >= 0.5 and recall >= 0.1:
+                        score = f1
+                        if score > self.champion_score:
+                            self.champion_score = score
+                            self.champion = {
+                                'params':    params,
+                                'model':     model,
+                                'scaler':    scaler,
+                                'threshold': threshold,
+                                'precision': precision,
+                                'recall':    recall,
+                                'f1':        f1,
+                                'win_rate':  win_rate,
+                            }
+                            logging.info(f"  *** NEW CHAMPION! Precision: {precision:.1%}, Recall: {recall:.1%} ***")
+
+                    self.results.append(result)
+
+                except Exception as e:
+                    logging.error(f"Error evaluating params: {e}")
+                    import traceback
+                    traceback.print_exc()
+
         self.save_results()
         self.print_summary()
-        
+
         return self.champion
     
     def print_summary(self):
@@ -428,7 +533,8 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='Binary BUY Detector Hyperparameter Search')
     parser.add_argument('--quick', action='store_true', help='Run quick search')
     parser.add_argument('--data-dir', default='saved_data/historical_4h', help='Data directory')
+    parser.add_argument('--max-files', type=int, default=None, help='Limit number of parquet files loaded per combination')
     args = parser.parse_args()
-    
+
     search = BinaryHyperparameterSearch(data_dir=args.data_dir)
-    search.run_search(quick=args.quick)
+    search.run_search(quick=args.quick, max_files=args.max_files)

@@ -1,0 +1,16 @@
+{
+  "params": {
+    "window_size": 30,
+    "horizon": 12,
+    "buy_threshold": 0.002,
+    "classifier": "xgboost",
+    "n_estimators": 200,
+    "max_depth": 5,
+    "min_precision": 0.5
+  },
+  "threshold": 0.8159956932067871,
+  "precision": 0.5000027298387757,
+  "recall": 0.7652539398699801,
+  "f1": 0.6048244093318144,
+  "win_rate": 0.5000027298387757
+}

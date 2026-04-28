@@ -38,4 +38,5 @@ poetry.lock  # Optional: some prefer to commit this
 # Secrets
 *.txt
 !README.md
-authenticator_app.txt
+authenticator_app.txt.claude/worktrees/
+.claude/worktrees/

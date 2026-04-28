@@ -64,7 +64,7 @@ class SellHyperparameterSearch:
         return {
             'window_size':    [10, 15, 20, 30],
             'horizon':        [2, 3, 5],           # Shorter — fast exits
-            'sell_threshold': [0.005, 0.01, 0.015, 0.02],
+            'sell_threshold': [0.01, 0.015, 0.02, 0.025],
             'classifier':     ['random_forest', 'xgboost'],
             'n_estimators':   [100, 200],
             'max_depth':      [5, 10, None],
@@ -76,7 +76,7 @@ class SellHyperparameterSearch:
         return {
             'window_size':    [15, 20, 30],
             'horizon':        [2, 3, 5],
-            'sell_threshold': [0.005, 0.01, 0.015],
+            'sell_threshold': [0.01, 0.015, 0.02],
             'classifier':     ['random_forest', 'xgboost'],
             'n_estimators':   [100, 200],
             'max_depth':      [6, 8, 10],
@@ -147,7 +147,7 @@ class SellHyperparameterSearch:
                 max_depth=max_depth if max_depth else 6,
                 learning_rate=0.1,
                 # Higher scale_pos_weight → more SELL predictions
-                scale_pos_weight=8,
+                scale_pos_weight=4,
                 random_state=42,
                 n_jobs=-1,
                 eval_metric='aucpr'
@@ -271,7 +271,7 @@ class SellHyperparameterSearch:
             )
 
             # Champion: recall >= 0.2 and precision >= 0.4, ranked by F1
-            if recall >= 0.2 and precision >= 0.4:
+            if recall >= 0.3 and precision >= 0.4:
                 score = f1
                 if score > self.champion_score:
                     self.champion_score = score
@@ -434,7 +434,7 @@ class SellHyperparameterSearch:
                         f"  Precision: {precision:.3f}, Recall: {recall:.3f}, F1: {f1:.3f}"
                     )
 
-                    if recall >= 0.2 and precision >= 0.4:
+                    if recall >= 0.3 and precision >= 0.4:
                         score = f1
                         if score > self.champion_score:
                             self.champion_score = score
