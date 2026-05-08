@@ -57,8 +57,9 @@ class BinaryBuyPredictor:
         self.feature_builder = BinaryFeatureBuilder(
             window_size=self.params['window_size'],
             horizon=self.params.get('horizon', 6),
-            buy_threshold=self.params.get('buy_threshold', 0.02),
-            feature_mode=self.params.get('feature_mode', 'catch22')
+            take_profit=self.params.get('take_profit', self.params.get('buy_threshold', 0.01)),
+            stop_loss=self.params.get('stop_loss', 0.005),
+            feature_mode=self.params.get('feature_mode', 'combined')
         )
 
         logging.info(

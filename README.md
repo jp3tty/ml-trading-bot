@@ -8,10 +8,23 @@ Automated stock trading system using separate binary ML models for entry and exi
 
 | Detector | Objective | Tuned For |
 |----------|-----------|-----------|
-| **BUY** | Identify high-probability entries | Precision — minimize false positives |
+| **BUY** | Catch as many valid entries as possible | Recall — SELL handles bad entries |
 | **SELL** | Detect early signs of decline | Recall — exit fast, miss fewer turns |
 
-The system defaults to **HOLD**. A position is only entered when the BUY detector fires with sufficient confidence, and only exited when the SELL detector triggers on a held position.
+The system defaults to **HOLD**. A position is only entered when the BUY detector fires, and only exited when the SELL detector triggers on a held position.
+
+### Architectural Decision (2026-05-06)
+
+The BUY detector is optimized for **recall over precision**. Because the SELL detector has 100% recall and cuts losing positions quickly, a bad BUY entry becomes a short, bounded loss rather than a catastrophe. Chasing high BUY precision was causing the model to miss the majority of real opportunities (near-zero recall). The precision floor is now set to 35–40% (enough to avoid excessive commission drag) while the threshold optimizer maximizes recall within that constraint. Champion selection ranks by recall, not F1.
+
+### BUY Labeling: Triple-Barrier Method
+
+BUY labels are generated using the **triple-barrier method** (Lopez de Prado), not a simple fixed-horizon return. For each candle, the next `horizon` bars are scanned using high/low prices:
+
+- **Label 1 (BUY):** take-profit barrier (`+take_profit%`) is touched *before* the stop-loss barrier
+- **Label 0 (NOT BUY):** stop-loss is hit first, both barriers hit the same candle (conservative tie-break), or neither barrier is hit within `horizon` candles (time barrier)
+
+This produces meaningfully balanced labels and filters for setups with an explicit positive reward:risk ratio.
 
 ## Architecture
 
@@ -25,7 +38,7 @@ The system defaults to **HOLD**. A position is only entered when the BUY detecto
 ┌─────────────────────────────────────────────────────────────────────┐
 │                       FEATURE ENGINEERING                           │
 │  BinaryFeatureBuilder / BinarySellFeatureBuilder                    │
-│  Modes: catch22 (primary) · indicators · combined                  │
+│  Modes: combined (primary) · catch22 · indicators                  │
 └──────────────────┬──────────────────────────┬───────────────────────┘
                    │                          │
           ┌────────▼────────┐       ┌─────────▼───────┐
@@ -216,13 +229,19 @@ Each run executes two passes:
 
 | Parameter | Value |
 |-----------|-------|
-| Classifier | XGBoost |
-| Window size | 40 bars |
+| Classifier | Random Forest |
+| Window size | 30 bars |
 | Horizon | 9 bars |
-| Buy threshold | 1.5% |
-| Decision threshold | 0.826 |
-| Precision | 58.6% |
-| Feature mode | catch22 |
+| Take profit | 0.5% |
+| Stop loss | 0.3% |
+| Decision threshold | 0.507 |
+| Precision | 48.0% |
+| Recall | 31.0% |
+| F1 | 0.377 |
+| Feature mode | combined |
+| Labeling | Triple-barrier |
+
+> **Note:** The above champion was produced before triple-barrier labeling was introduced and does not yet reflect the new search. A new search with triple-barrier labels is the active next step.
 
 ### SELL Detector (Current Champion)
 
@@ -250,8 +269,10 @@ Optimised for recall (fast exits). Champion selection requires `recall ≥ 20%` 
 
 ### Champion Selection
 
-**BUY**: `precision ≥ 50%` and `recall ≥ 10%` → ranked by F1
+**BUY**: `precision ≥ min_precision` (searched: 0.35–0.40) → ranked by **recall**
 **SELL**: `recall ≥ 20%` and `precision ≥ 40%` → ranked by F1
+
+The BUY threshold is chosen to maximize recall subject to the precision floor. The SELL threshold is chosen to maximize F1 subject to both floors.
 
 ## Output Files
 
@@ -276,16 +297,17 @@ Default filters (configurable in `stock_picker/stock_screener.py`):
 | Phase | Description | Status |
 |-------|-------------|--------|
 | 1 | Data collection (daily + 4h parquet) | ✅ Complete |
-| 2 | Feature engineering (catch22 + indicators) | ✅ Complete |
-| 3 | BUY detector training + champion selection | ✅ Complete |
+| 2 | Feature engineering (catch22 + indicators + combined) | ✅ Complete |
+| 3 | BUY detector training + champion selection | 🔄 In progress |
 | 4 | BUY detector integrated into trading loop | ✅ Complete |
 | 5 | SELL detector training + champion selection | ✅ Complete |
-| 6 | Full BUY + SELL integration + paper trading | 🔄 In progress |
+| 6 | Full BUY + SELL integration + paper trading | ⏳ Blocked on Phase 3 |
 | 7 | Refinement (ensemble, market context, walk-forward) | ⏳ Planned |
 
-**Known issue:** The current BUY champion threshold (0.826) is too conservative — all scanned
-symbols score in the 0.63–0.82 range and no BUY signals fire. Next step is to re-train the BUY
-detector with a relaxed `min_precision` floor or manually lower the threshold for paper testing.
+**Active work:** Switched BUY labeling to triple-barrier method (Lopez de Prado). Running new
+hyperparameter search with `take_profit` + `stop_loss` barriers, dual precision/recall constraints,
+and combined feature mode. Previous fixed-horizon approach produced near-zero recall across all
+parameter combinations, making the champion model effectively non-functional for live trading.
 
 ## Development Roadmap
 

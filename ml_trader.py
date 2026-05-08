@@ -16,6 +16,8 @@ logging.basicConfig(
     format='%(asctime)s - %(levelname)s - %(message)s'
 )
 
+MAX_POSITIONS = 20
+
 class MLTrader:
     def __init__(self, model_path=None, sell_model_path=None, paper=True):
         self.conn = AlpacaConnection(paper=paper)
@@ -229,9 +231,19 @@ class MLTrader:
             symbols = self.get_watchlist()
 
         buy_candidates = [s for s in symbols if s not in held]
-        logging.info(f"--- BUY pass: {len(buy_candidates)} candidates "
-                     f"({len(symbols) - len(buy_candidates)} skipped — already held) ---")
+        open_slots     = max(0, MAX_POSITIONS - len(held))
+        logging.info(
+            f"--- BUY pass: {len(buy_candidates)} candidates "
+            f"({len(symbols) - len(buy_candidates)} skipped — already held) | "
+            f"position slots available: {open_slots}/{MAX_POSITIONS} ---"
+        )
 
+        if open_slots == 0:
+            logging.info("  At position limit — BUY pass skipped.")
+            buy_candidates = []
+
+        # Step 1: Score all candidates
+        scored_candidates = []
         for symbol in buy_candidates:
             try:
                 df = self.fetch_recent_data(symbol)
@@ -240,30 +252,52 @@ class MLTrader:
                     continue
 
                 current_price = float(df['close'].iloc[-1])
-                should_buy, confidence = self.should_buy(df)
+                prediction    = self.buy_detector.predict(df)
+                if prediction is None:
+                    continue
 
+                scored_candidates.append((symbol, prediction, current_price))
                 logging.info(
-                    f"{symbol}: BUY={'YES' if should_buy else 'NO'} "
-                    f"(prob={confidence:.3f}) @ ${current_price:.2f}"
+                    f"{symbol}: scored  BUY={'YES' if prediction['is_buy'] else 'NO'} "
+                    f"(prob={prediction['probability']:.3f}) @ ${current_price:.2f}"
                 )
-
-                if should_buy and confidence >= min_confidence:
-                    if dry_run:
-                        logging.info(f"[DRY RUN] Would BUY {symbol}")
-                    else:
-                        order = self.execute_trade(symbol, 'BUY', confidence, current_price)
-                        if order:
-                            trades_executed.append({
-                                'symbol': symbol,
-                                'signal': 'BUY',
-                                'confidence': confidence,
-                                'price': current_price,
-                                'time': datetime.now(),
-                            })
 
             except Exception as e:
                 logging.error(f"Error in BUY pass for {symbol}: {e}")
                 continue
+
+        # Step 2: Rank by probability, keep top N (capped by open slots and 5-per-run limit)
+        scored_candidates.sort(key=lambda x: x[1]['probability'], reverse=True)
+        max_buys = min(5, open_slots)
+        top5     = scored_candidates[:max_buys]
+        logging.info(
+            f"  Top {max_buys} of {len(scored_candidates)} scored: "
+            f"{[s for s, _, _ in top5]}"
+        )
+
+        # Step 3: Act on top 5 only
+        for symbol, prediction, current_price in top5:
+            confidence = prediction['probability']
+            should_buy = prediction['is_buy']
+
+            logging.info(
+                f"{symbol}: BUY={'YES' if should_buy else 'NO'} "
+                f"(prob={confidence:.3f}) @ ${current_price:.2f} [top 5]"
+            )
+
+            if should_buy and confidence >= min_confidence:
+                if dry_run:
+                    logging.info(f"[DRY RUN] Would BUY {symbol}")
+                else:
+                    order = self.execute_trade(symbol, 'BUY', confidence, current_price)
+                    if order:
+                        trades_executed.append({
+                            'symbol': symbol,
+                            'signal': 'BUY',
+                            'confidence': confidence,
+                            'price': current_price,
+                            'time': datetime.now(),
+                        })
 
         # Summary
         logging.info("=" * 50)

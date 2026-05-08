@@ -21,15 +21,15 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: '3.14'
+          python-version: '3.12'
 
       - name: Install dependencies
         run: |
           pip install poetry
           poetry install
 
-      - name: Run scanner
+      - name: Run ML trader
         env:
           ALPACA_API_KEY: ${{ secrets.ALPACA_API_KEY }}
           ALPACA_SECRET_KEY: ${{ secrets.ALPACA_SECRET_KEY }}
-        run: poetry run python -m Streaming_Method.scanner
+        run: poetry run python ml_trader.py

@@ -1,8 +1,8 @@
 """
 Binary Feature Builder for BUY Signal Detection
-Creates binary classification features:
-  - Label 1 (BUY): Future return exceeds buy_threshold
-  - Label 0 (NOT BUY): Everything else
+Creates binary classification features using triple-barrier labeling:
+  - Label 1 (BUY): Price hits take_profit barrier before stop_loss within horizon candles
+  - Label 0 (NOT BUY): Stop loss hit first, or neither barrier hit (time barrier)
 
 Optimized for 4-hour candlestick data and high-precision trading signals.
 """
@@ -27,10 +27,13 @@ class BinaryFeatureBuilder:
     MODE_CATCH22 = 'catch22'
     MODE_COMBINED = 'combined'
 
-    def __init__(self, window_size=20, horizon=6, buy_threshold=0.02, feature_mode='indicators', min_volume=0):
+    def __init__(self, window_size=20, horizon=6, buy_threshold=None, take_profit=0.01,
+                 stop_loss=0.005, feature_mode='indicators', min_volume=0):
         self.window_size = window_size
         self.horizon = horizon
-        self.buy_threshold = buy_threshold
+        # buy_threshold is a legacy alias for take_profit
+        self.take_profit = buy_threshold if buy_threshold is not None else take_profit
+        self.stop_loss = stop_loss
         self.feature_mode = feature_mode
         self.min_volume = min_volume
         self.ta = TechnicalAnalysis()
@@ -38,7 +41,15 @@ class BinaryFeatureBuilder:
         self.indicator_cols = [
             'open_norm', 'high_norm', 'low_norm', 'close_norm',
             'rsi', 'momentum_strength', 'hammer', 'engulfing', 'doji_num',
-            'volume_norm', 'volatility'
+            'volume_norm', 'volatility',
+            # MACD
+            'macd_norm', 'macd_signal_norm', 'macd_hist_norm',
+            # Bollinger Bands
+            'bb_position', 'bb_width',
+            # Multi-timeframe context
+            'weekly_momentum', 'trend_sma',
+            # Composite momentum signals
+            'bullish_momentum', 'bearish_momentum',
         ]
 
         self.catch22_names = [
@@ -70,8 +81,8 @@ class BinaryFeatureBuilder:
         # add technical indicators
         df = self._add_indicators(df)
 
-        # Create binary BUY labels
-        df = self._create_binary_labels(df)
+        # Create triple-barrier BUY labels
+        df = self._create_triple_barrier_labels(df)
 
         # Build features based on mode
         if self.feature_mode == self.MODE_CATCH22:
@@ -106,16 +117,69 @@ class BinaryFeatureBuilder:
         df['return'] = df['close'].pct_change()
         df['volatility'] = df['return'].rolling(window=self.window_size).std()
 
+        # MACD (normalized by close price to keep scale-invariant)
+        ema12 = df['close'].ewm(span=12, adjust=False).mean()
+        ema26 = df['close'].ewm(span=26, adjust=False).mean()
+        macd_raw = ema12 - ema26
+        macd_signal_raw = macd_raw.ewm(span=9, adjust=False).mean()
+        df['macd_norm'] = macd_raw / df['close']
+        df['macd_signal_norm'] = macd_signal_raw / df['close']
+        df['macd_hist_norm'] = (macd_raw - macd_signal_raw) / df['close']
+
+        # Bollinger Bands (20-period)
+        bb_mid = df['close'].rolling(20).mean()
+        bb_std = df['close'].rolling(20).std()
+        bb_upper = bb_mid + 2 * bb_std
+        bb_lower = bb_mid - 2 * bb_std
+        bb_range = (bb_upper - bb_lower).replace(0, np.nan)
+        df['bb_position'] = (df['close'] - bb_lower) / bb_range  # 0=at lower, 1=at upper
+        df['bb_width'] = bb_range / bb_mid                        # wider = more volatile
+
+        # Multi-timeframe context (4h bars: 6/bar/day → ~42 bars/week)
+        df['weekly_momentum'] = df['close'].pct_change(42)
+        df['trend_sma'] = (df['sma_20'] > df['sma_50']).astype(float)
+
+        # Composite momentum signals (cast bool → float for window builder)
+        df['bullish_momentum'] = df['bullish_momentum'].astype(float)
+        df['bearish_momentum'] = df['bearish_momentum'].astype(float)
+
+
         return df
 
-    def _create_binary_labels(self, df):
-        """Create binary BUY labels based on future returns"""
-        # Calculate future returns
-        df['future_return'] = df['close'].shift(-self.horizon) / df['close'] - 1
+    def _create_triple_barrier_labels(self, df):
+        """Triple-barrier labeling (Lopez de Prado).
 
-        # Binary label: 1 if return exceeds threshold, 0 otherwise
-        df['label'] = (df['future_return'] > self.buy_threshold).astype(int)
+        For each candle, scan the next `horizon` candles using high/low prices:
+          - Label 1: take_profit barrier touched before stop_loss barrier
+          - Label 0: stop_loss hit first, both hit the same candle, or time barrier
+        Conservative tie-breaking: when both barriers are touched on the same candle,
+        the stop loss wins (label 0).
+        """
+        closes = df['close'].values
+        highs  = df['high'].values
+        lows   = df['low'].values
+        n      = len(closes)
+        labels = np.full(n, np.nan)
 
+        for i in range(n - 1):
+            entry = closes[i]
+            upper = entry * (1.0 + self.take_profit)
+            lower = entry * (1.0 - self.stop_loss)
+
+            end          = min(i + 1 + self.horizon, n)
+            future_highs = highs[i + 1:end]
+            future_lows  = lows[i + 1:end]
+
+            upper_hits = np.where(future_highs >= upper)[0]
+            lower_hits = np.where(future_lows  <= lower)[0]
+
+            first_upper = upper_hits[0] if len(upper_hits) > 0 else self.horizon
+            first_lower = lower_hits[0] if len(lower_hits) > 0 else self.horizon
+
+            # Strict less-than: ties (same candle) go to stop loss (conservative)
+            labels[i] = 1 if first_upper < first_lower else 0
+
+        df['label'] = labels
         return df
 
     def _build_indicator_features(self, df):

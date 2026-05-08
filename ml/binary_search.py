@@ -48,48 +48,53 @@ class BinaryHyperparameterSearch:
         self.results = []
         self.champion = None
         self.champion_score = 0
+        self.timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         
     def define_search_space(self):
-        """Full hyperparameter search space"""
+        """Full hyperparameter search space.
+        Optimizes for maximum recall subject to a minimum precision floor.
+        The SELL detector handles bad entries, so BUY recall matters more than precision.
+        """
         return {
-            # Feature Builder parameters
-            'window_size': [10, 15, 20, 30],
-            'horizon': [3, 6, 12],
-            'buy_threshold': [0.002, 0.003, 0.004, 0.005],
-            
-            # Classifier parameters
-            'classifier': ['random_forest', 'xgboost'],
-            'n_estimators': [100, 200],
-            'max_depth': [5, 10, None],
-            
-            # Threshold optimization
-            'min_precision': [0.52, 0.55],
+            'window_size':   [10, 15, 20, 30],
+            'horizon':       [3, 6, 12],
+            'take_profit':   [0.005, 0.010, 0.015],
+            'stop_loss':     [0.003, 0.005, 0.008],
+            'classifier':    ['random_forest', 'xgboost'],
+            'n_estimators':  [100, 200],
+            'max_depth':     [5, 10, None],
+            'min_precision': [0.35, 0.40],
         }
-    
+
     def define_quick_search_space(self):
-        """Smaller search space for faster iteration"""
+        """Focused search space (~40 combos, ~4 hrs with combined features).
+        Anchored around the previous champion region (window=30, horizon=9, xgboost).
+        Optimizes for recall — SELL detector manages risk on bad entries.
+        """
         return {
-            'window_size': [15, 18, 21],
-            'horizon': [3, 4, 5, 6],
-            'buy_threshold': [0.002, 0.003, 0.004],  # Lower threshold = more signals
-            'classifier': ['random_forest'],         # Can be 'random_forest' or 'xgboost'
-            'n_estimators': [100, 150],
-            'max_depth': [8, 10, 12],                # Tree depths
-            'min_precision': [0.45, 0.50],
+            'window_size':   [21, 30],
+            'horizon':       [9],
+            'take_profit':   [0.008, 0.010, 0.015],
+            'stop_loss':     [0.005, 0.008],
+            'classifier':    ['random_forest', 'xgboost'],
+            'n_estimators':  [200],
+            'max_depth':     [8, 12],
+            'min_precision': [0.35, 0.40],
         }
     
-    def load_data(self, window_size, horizon, buy_threshold, max_files=None):
+    def load_data(self, window_size, horizon, take_profit, stop_loss, max_files=None):
         """Load and build features with given parameters"""
         try:
             from ml.binary_feature_builder import BinaryFeatureBuilder
         except:
             from binary_feature_builder import BinaryFeatureBuilder
-        
+
         fb = BinaryFeatureBuilder(
             window_size=window_size,
             horizon=horizon,
-            buy_threshold=buy_threshold,
-            feature_mode='catch22' # Can be 'indicators', 'catch22', or 'combined'
+            take_profit=take_profit,
+            stop_loss=stop_loss,
+            feature_mode='combined'
         )
         
         all_X, all_y = [], []
@@ -145,37 +150,39 @@ class BinaryHyperparameterSearch:
                 eval_metric='aucpr'
             )
     
-    def find_optimal_threshold(self, y_true, y_proba, min_precision):
-        """Find threshold maximizing F1 with minimum precision constraint"""
+    def find_optimal_threshold(self, y_true, y_proba, min_precision, min_recall=0.0):
+        """Find threshold maximizing recall subject to a minimum precision floor.
+
+        The BUY detector does not need to be right every time — bad entries are
+        handled by the SELL detector. So we prioritize catching as many real
+        opportunities as possible (high recall) while keeping precision above a
+        minimum floor to avoid excessive commission drag.
+        """
         from sklearn.metrics import precision_recall_curve
-        
+
         precisions, recalls, thresholds = precision_recall_curve(y_true, y_proba)
-        
-        # Valid thresholds meeting precision requirement
+
         valid_idx = precisions[:-1] >= min_precision
-        
+
         if not any(valid_idx):
-            # Return threshold with highest precision
             return thresholds[np.argmax(precisions[:-1])], False
-        
-        # Maximize F1 among valid thresholds
-        f1_scores = 2 * (precisions[:-1] * recalls[:-1]) / (precisions[:-1] + recalls[:-1] + 1e-10)
-        f1_scores[~valid_idx] = 0
-        
-        best_idx = np.argmax(f1_scores)
+
+        # Among thresholds that meet the precision floor, pick the one with highest recall
+        valid_recalls = np.where(valid_idx, recalls[:-1], 0.0)
+        best_idx = np.argmax(valid_recalls)
         return thresholds[best_idx], True
     
     def evaluate_params(self, params):
         """Train and evaluate a single parameter combination"""
         logging.info(f"Testing: window={params['window_size']}, horizon={params['horizon']}, "
-                     f"buy_thresh={params['buy_threshold']}, clf={params['classifier']}")
-        
+                     f"take_profit={params['take_profit']}, stop_loss={params['stop_loss']}, clf={params['classifier']}")
+
         try:
-            # Load data
             X, y = self.load_data(
                 window_size=params['window_size'],
                 horizon=params['horizon'],
-                buy_threshold=params['buy_threshold']
+                take_profit=params['take_profit'],
+                stop_loss=params['stop_loss'],
             )
             
             if X is None or len(X) < 1000:
@@ -261,9 +268,9 @@ class BinaryHyperparameterSearch:
             logging.info(f"  Precision: {precision:.3f}, Recall: {recall:.3f}, "
                         f"F1: {f1:.3f}, Win Rate: {win_rate:.1%}")
             
-            # Check if champion (by precision, with recall floor)
-            if precision >= 0.5 and recall >= 0.1:
-                score = f1 
+            # Champion ranked by recall — SELL detector handles bad entries
+            if precision >= params.get('min_precision', 0.35):
+                score = recall
                 if score > self.champion_score:
                     self.champion_score = score
                     self.champion = {
@@ -300,11 +307,38 @@ class BinaryHyperparameterSearch:
             # Skip XGBoost if not available
             if params['classifier'] == 'xgboost' and not XGBOOST_AVAILABLE:
                 continue
-            
+
+            # Require take_profit > stop_loss (at least 1:1 reward:risk)
+            if 'take_profit' in params and 'stop_loss' in params:
+                if params['take_profit'] <= params['stop_loss']:
+                    continue
+
             combinations.append(params)
-        
+
         return combinations
     
+    def _save_incremental_results(self):
+        if not self.results:
+            return
+        df = pd.DataFrame(self.results).sort_values('f1', ascending=False)
+        df.to_csv(f"{self.results_dir}/binary_search_{self.timestamp}.csv", index=False)
+
+    def _save_champion_json(self):
+        if not self.champion:
+            return
+        params_path = f"{self.results_dir}/champion_params_{self.timestamp}.json"
+        with open(params_path, 'w') as f:
+            json.dump({
+                'params': {k: (int(v) if isinstance(v, np.integer) else
+                               float(v) if isinstance(v, np.floating) else v)
+                           for k, v in self.champion['params'].items()},
+                'threshold': float(self.champion['threshold']),
+                'precision': float(self.champion['precision']),
+                'recall':    float(self.champion['recall']),
+                'f1':        float(self.champion['f1']),
+                'win_rate':  float(self.champion['win_rate'])
+            }, f, indent=2)
+
     def run_search(self, quick=False, max_files=None):
         """Run grid search"""
         search_space = self.define_quick_search_space() if quick else self.define_search_space()
@@ -312,20 +346,21 @@ class BinaryHyperparameterSearch:
 
         logging.info(f"Running {'quick ' if quick else ''}search with {len(combinations)} combinations")
 
-        # Group by data config so features are built once per unique (window, horizon, threshold)
+        # Group by data config so features are built once per unique (window, horizon, take_profit, stop_loss)
         from itertools import groupby
-        data_keys = ('window_size', 'horizon', 'buy_threshold')
+        data_keys = ('window_size', 'horizon', 'take_profit', 'stop_loss')
         sorted_combos = sorted(combinations, key=lambda c: tuple(c[k] for k in data_keys))
 
         total = len(sorted_combos)
         done = 0
 
         for data_cfg, group in groupby(sorted_combos, key=lambda c: tuple(c[k] for k in data_keys)):
-            window_size, horizon, buy_threshold = data_cfg
+            window_size, horizon, take_profit, stop_loss = data_cfg
 
-            logging.info(f"\n--- Loading data: window={window_size}, horizon={horizon}, buy_thresh={buy_threshold} ---")
+            logging.info(f"\n--- Loading data: window={window_size}, horizon={horizon}, "
+                         f"take_profit={take_profit}, stop_loss={stop_loss} ---")
             X, y = self.load_data(window_size=window_size, horizon=horizon,
-                                  buy_threshold=buy_threshold, max_files=max_files)
+                                  take_profit=take_profit, stop_loss=stop_loss, max_files=max_files)
 
             if X is None or len(X) < 1000:
                 logging.warning("Insufficient data for this config — skipping")
@@ -348,7 +383,7 @@ class BinaryHyperparameterSearch:
                 logging.info(f"\n=== Combination {done}/{total} ===")
                 logging.info(
                     f"Testing: window={params['window_size']}, horizon={params['horizon']}, "
-                    f"buy_thresh={params['buy_threshold']}, clf={params['classifier']}, "
+                    f"take_profit={params['take_profit']}, stop_loss={params['stop_loss']}, clf={params['classifier']}, "
                     f"n_est={params['n_estimators']}, depth={params['max_depth']}, "
                     f"min_prec={params['min_precision']}"
                 )
@@ -358,7 +393,9 @@ class BinaryHyperparameterSearch:
                     model.fit(X_train, y_train)
                     y_proba = model.predict_proba(X_test)[:, 1]
 
-                    threshold, met_precision = self.find_optimal_threshold(y_test, y_proba, params['min_precision'])
+                    threshold, met_precision = self.find_optimal_threshold(
+                        y_test, y_proba, params['min_precision'], params.get('min_recall', 0.0)
+                    )
                     y_pred = (y_proba >= threshold).astype(int)
 
                     accuracy  = accuracy_score(y_test, y_pred)
@@ -382,7 +419,7 @@ class BinaryHyperparameterSearch:
                     result = {
                         **params,
                         'threshold':         threshold,
-                        'met_precision_req': met_precision,
+                        'met_constraints':   met_precision,
                         'accuracy':          accuracy,
                         'precision':         precision,
                         'recall':            recall,
@@ -400,8 +437,8 @@ class BinaryHyperparameterSearch:
                     logging.info(f"  Precision: {precision:.3f}, Recall: {recall:.3f}, "
                                  f"F1: {f1:.3f}, Win Rate: {win_rate:.1%}")
 
-                    if precision >= 0.5 and recall >= 0.1:
-                        score = f1
+                    if precision >= params.get('min_precision', 0.35):
+                        score = recall  # Rank by recall — SELL handles bad entries
                         if score > self.champion_score:
                             self.champion_score = score
                             self.champion = {
@@ -415,8 +452,10 @@ class BinaryHyperparameterSearch:
                                 'win_rate':  win_rate,
                             }
                             logging.info(f"  *** NEW CHAMPION! Precision: {precision:.1%}, Recall: {recall:.1%} ***")
+                            self._save_champion_json()
 
                     self.results.append(result)
+                    self._save_incremental_results()
 
                 except Exception as e:
                     logging.error(f"Error evaluating params: {e}")
@@ -440,23 +479,20 @@ class BinaryHyperparameterSearch:
         print("BINARY BUY DETECTOR SEARCH RESULTS")
         print("="*70)
         
+        cols = ['window_size', 'horizon', 'take_profit', 'stop_loss',
+                'classifier', 'precision', 'recall', 'f1', 'win_rate']
+
+        # Top by recall (primary objective)
+        print("\nTop 5 by Recall (primary objective):")
+        print(df.nlargest(5, 'recall')[cols].to_string(index=False))
+
         # Top by F1
         print("\nTop 5 by F1 Score:")
-        top_f1 = df.nlargest(5, 'f1')[['window_size', 'horizon', 'buy_threshold', 
-                                        'classifier', 'precision', 'recall', 'f1', 'win_rate']]
-        print(top_f1.to_string(index=False))
-        
-        # Top by precision (high confidence signals)
-        print("\nTop 5 by Precision (fewest false BUYs):")
-        top_prec = df.nlargest(5, 'precision')[['window_size', 'horizon', 'buy_threshold',
-                                                  'classifier', 'precision', 'recall', 'f1', 'win_rate']]
-        print(top_prec.to_string(index=False))
-        
-        # Top by win rate
-        print("\nTop 5 by Win Rate:")
-        top_win = df.nlargest(5, 'win_rate')[['window_size', 'horizon', 'buy_threshold',
-                                               'classifier', 'precision', 'recall', 'f1', 'win_rate']]
-        print(top_win.to_string(index=False))
+        print(df.nlargest(5, 'f1')[cols].to_string(index=False))
+
+        # Top by precision
+        print("\nTop 5 by Precision:")
+        print(df.nlargest(5, 'precision')[cols].to_string(index=False))
         
         if self.champion:
             print("\n" + "="*70)
@@ -472,47 +508,23 @@ class BinaryHyperparameterSearch:
         print("="*70)
     
     def save_results(self):
-        """Save results and champion model"""
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        
-        # Save results CSV
-        if self.results:
-            df = pd.DataFrame(self.results)
-            df = df.sort_values('f1', ascending=False)
-            results_path = f"{self.results_dir}/binary_search_{timestamp}.csv"
-            df.to_csv(results_path, index=False)
-            logging.info(f"Results saved to {results_path}")
-        
-        # Save champion model
-        if self.champion:
-            model_path = f"{self.results_dir}/champion_binary_{timestamp}.pkl"
-            
-            save_data = {
-                'model': self.champion['model'],
-                'scaler': self.champion['scaler'],
-                'threshold': self.champion['threshold'],
-                'params': self.champion['params'],
-                'precision': self.champion['precision'],
-                'recall': self.champion['recall'],
-                'f1': self.champion['f1'],
-                'win_rate': self.champion['win_rate']
-            }
-            
-            joblib.dump(save_data, model_path)
+        """Save final results — CSV and champion JSON are already current from incremental saves."""
+        results_path = f"{self.results_dir}/binary_search_{self.timestamp}.csv"
+        logging.info(f"Results saved to {results_path}")
 
-            # Save params as JSON
-            params_path = f"{self.results_dir}/champion_params_{timestamp}.json"
-            with open(params_path, 'w') as f:
-                json.dump({
-                    'params': {k: (int(v) if isinstance(v, np.integer) else
-                                float(v) if isinstance(v, np.floating) else v)
-                            for k, v in self.champion['params'].items()},
-                    'threshold': float(self.champion['threshold']),
-                    'precision': float(self.champion['precision']),
-                    'recall': float(self.champion['recall']),
-                    'f1': float(self.champion['f1']),
-                    'win_rate': float(self.champion['win_rate'])
-                }, f, indent=2)
+        if self.champion:
+            model_path = f"{self.results_dir}/champion_binary_{self.timestamp}.pkl"
+            joblib.dump({
+                'model':     self.champion['model'],
+                'scaler':    self.champion['scaler'],
+                'threshold': self.champion['threshold'],
+                'params':    self.champion['params'],
+                'precision': self.champion['precision'],
+                'recall':    self.champion['recall'],
+                'f1':        self.champion['f1'],
+                'win_rate':  self.champion['win_rate']
+            }, model_path)
+            self._save_champion_json()
 
 
 def run_quick_search():

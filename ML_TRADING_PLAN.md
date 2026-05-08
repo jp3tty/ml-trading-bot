@@ -251,38 +251,55 @@ class FeatureBuilder:
 
 ## Step 3: Labeling Strategy
 
-### Binary Classification Approach (Current)
+### Triple-Barrier Method (Current)
 
-Instead of 3-class classification, we use **separate binary detectors**:
+BUY labels use the **triple-barrier method** (Lopez de Prado) instead of a fixed-horizon return check. For each candle, the subsequent `horizon` candles are scanned using their high/low prices:
 
-#### BUY Detector Labels
-```
-Label 1 (BUY):     future_return > buy_threshold (e.g., +1.5%)
-Label 0 (NOT_BUY): Everything else
-```
+- **Label 1 (BUY):** `high >= entry * (1 + take_profit)` before `low <= entry * (1 - stop_loss)`
+- **Label 0 (NOT BUY):** stop-loss hit first, both barriers on the same candle (tie → stop-loss wins), or neither hit within `horizon` candles (time barrier)
 
-#### SELL Detector Labels (Future)
+This is strictly better than the fixed-horizon approach because:
+- It defines success by actual risk/reward, not just direction at a fixed future point
+- Labels are path-aware — a price that spikes then crashes is correctly labeled 1 only if the spike comes first
+- Positive-class balance is naturally higher and more meaningful
+
+#### SELL Detector Labels
 ```
-Label 1 (SELL):     future_return < sell_threshold (e.g., -1%)
+Label 1 (SELL):     future_return < sell_threshold (e.g., -0.5%)
 Label 0 (NOT_SELL): Everything else
 ```
+SELL labels remain fixed-horizon for now. Triple-barrier could be applied here too if the SELL detector underperforms.
 
 ### Key Parameters
 
-| Parameter | Description | Typical Values |
-|-----------|-------------|----------------|
-| `window_size` | Candles of history for features | 15-30 |
-| `horizon` | Candles ahead for label calculation | 3-9 |
-| `buy_threshold` | Min return to label as BUY | 0.015-0.03 (1.5-3%) |
-| `sell_threshold` | Max return to label as SELL | -0.01 to -0.02 |
+| Parameter | Description | Search Range |
+|-----------|-------------|--------------|
+| `window_size` | Candles of history for features | 15–30 |
+| `horizon` | Max candles to wait for a barrier to be hit | 6–9 |
+| `take_profit` | Upper barrier — % gain to label as BUY | 0.005–0.015 |
+| `stop_loss` | Lower barrier — % loss that cancels the BUY label | 0.003–0.008 |
+| `min_precision` | Minimum precision floor for threshold optimizer | 0.48–0.52 |
+| `min_recall` | Minimum recall floor for threshold optimizer | 0.05–0.10 |
 
-### Metric Targets for Early-Exit Strategy
+Combinations where `stop_loss >= take_profit` are filtered out (must have positive reward:risk).
+
+### Metric Targets — Architectural Decision (2026-05-06)
+
+The BUY detector is now optimized for **recall over precision**. Key reasoning:
+
+- The SELL detector has 100% recall — it catches every declining position and exits quickly
+- A bad BUY entry becomes a short, bounded loss; it does not need to be avoided at all costs
+- Chasing high BUY precision (≥ 48%) was causing near-zero recall — the model missed almost all real opportunities
+- Enough precision to avoid excessive commission drag is the only hard requirement
 
 | Metric | Target | Why |
 |--------|--------|-----|
-| **Precision** | ≥ 55% | Win rate must exceed 50% + transaction costs |
-| **Recall** | ≥ 10% | Enough signals to make trading worthwhile |
-| **F1 Score** | Maximize (with floors) | Balance precision and recall |
+| **Recall** | Maximize | Catch as many real entries as possible |
+| **Precision** | ≥ 35–40% floor | Avoid excessive commission drag from constant bad entries |
+| **F1** | Not the primary objective | Replaced by recall as the ranking metric |
+
+Champion selection ranks by **recall** (not F1) among models that meet the precision floor.
+Threshold optimization picks the lowest threshold that still meets the precision floor, maximizing recall.
 
 ---
 
@@ -313,12 +330,13 @@ from ml.binary_feature_builder import BinaryFeatureBuilder
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.preprocessing import StandardScaler
 
-# Build features
+# Build features with triple-barrier labels
 feature_builder = BinaryFeatureBuilder(
     window_size=15,
     horizon=6,
-    buy_threshold=0.02,
-    feature_mode='catch22'
+    take_profit=0.010,   # +1% take-profit barrier
+    stop_loss=0.005,     # -0.5% stop-loss barrier (2:1 reward:risk)
+    feature_mode='combined'
 )
 
 X, y = feature_builder.build_features(df)
@@ -359,13 +377,16 @@ champion = search.run_search(quick=True)
 
 ### Champion Selection Criteria
 
-Champions are selected by **highest F1 score** with minimum thresholds:
+Champions are selected by **highest F1 score** subject to both precision and recall floors. The decision threshold is chosen by `find_optimal_threshold()`, which maximizes F1 over the PR curve while satisfying both constraints simultaneously:
 
 ```python
-# Only consider models that meet both criteria:
-if precision >= 0.5 and recall >= 0.1:
-    score = f1  # Rank by F1 among qualifying models
+# Both floors enforced during threshold selection:
+valid_idx = (precisions >= min_precision) & (recalls >= min_recall)
+# Falls back to precision-only if no threshold meets both
+# Champion requires: precision >= min_precision AND recall >= min_recall
 ```
+
+Search space for the floors: `min_precision ∈ [0.48, 0.52]`, `min_recall ∈ [0.05, 0.10]`.
 
 ---
 
@@ -579,11 +600,21 @@ pip install scikit-learn xgboost pycatch22 pyarrow joblib pandas numpy
 - [x] Implement catch22 mode (time series features)
 - [x] Implement combined mode
 
-### Phase 3: BUY Detector Training ✅
+### Phase 3: BUY Detector Training 🔄
 - [x] Create `ml/binary_search.py` (hyperparameter grid search)
 - [x] Implement precision/recall optimization
 - [x] Champion selection by F1 with precision/recall floors
 - [x] Save champion model with scaler and threshold
+- [x] Incremental CSV + JSON saving after every combination (crash-safe)
+- [x] Switch labeling to triple-barrier method (`take_profit` + `stop_loss` barriers)
+- [x] Switch default feature mode to `combined` (indicators + catch22)
+- [x] Add MACD, Bollinger Bands, and multi-timeframe features to feature builder
+- [x] **2026-05-06: Reframe BUY optimization target from precision → recall**
+  - Threshold optimizer now maximizes recall subject to a minimum precision floor (0.35–0.40)
+  - Champion selection now ranks by recall, not F1
+  - `min_recall` removed from search space (redundant — optimizer directly maximizes it)
+  - Precision floor lowered from 0.48 → 0.35–0.40 (enough to avoid commission drag)
+- [ ] Run search with recall-optimized objective
 
 ### Phase 4: BUY Detector Integration ✅
 - [x] Create `ml/binary_predictor.py`
@@ -825,43 +856,41 @@ df['rel_strength'] = df['close'].pct_change(20) - spy_df['close'].pct_change(20)
 
 ### Improvement Priority Order
 
-1. **Use all data files** - Free improvement, no code changes needed
-2. **Lower `buy_threshold` to 0.008-0.01** - More training signal
-3. **Adjust `min_precision` to 0.4** - Trade some precision for recall
-4. **Add MACD and Bollinger Bands** - Proven short-term indicators
-5. **Ensemble models** - Combine multiple approaches
+1. ~~**Use all data files**~~ — Done (no file limit in current search)
+2. ~~**Lower `buy_threshold`**~~ — Superseded by triple-barrier labeling
+3. ~~**Adjust `min_precision`**~~ — Done (0.48–0.52 with dual recall constraint)
+4. ~~**Triple-barrier labeling**~~ — Done; replaces fixed-horizon approach
+5. **Add MACD and Bollinger Bands** — Proven short-term indicators (next after triple-barrier search validates)
+6. **Ensemble models** — Combine multiple approaches
 
 ---
 
 ## Next Steps
 
-### Immediate — Unblock BUY Signals (Phase 6)
-Current BUY champion threshold is 0.826 but live scan probabilities top out ~0.82 — no signals fire.
-Two options (pick one):
+### Immediate — BUY Search with Recall-Optimized Objective (2026-05-06)
+The BUY detector has been reframed to optimize recall. Run the next search:
 
-**Option A — Re-train BUY with relaxed precision floor (recommended)**
 ```bash
-# Lower min_precision from 0.58 → 0.45 in binary_search.py quick search space, then:
-poetry run python ml/binary_search.py --quick --max-files 60
+caffeinate -i poetry run python -m ml.binary_search --quick
 ```
 
-**Option B — Manual threshold test (faster, less principled)**
-```python
-# In binary_predictor.py or ml_trader.py, override threshold temporarily:
-predictor.threshold = 0.70
-```
+Search space: `take_profit ∈ [0.008, 0.010, 0.015]`, `stop_loss ∈ [0.005, 0.008]`,
+`min_precision ∈ [0.35, 0.40]`. Threshold optimizer maximizes recall subject to the precision floor.
+Champion ranked by recall. Features: `combined` (indicators + MACD + Bollinger Bands + multi-TF + catch22).
 
-### Short-term — Complete Phase 6
-1. Resolve BUY threshold issue (see above)
-2. Paper trade the full BUY + SELL system for several weeks
-3. Monitor `paper_trade_log/signals.csv` and open positions daily
-4. Build a simple backtesting framework against the existing parquet files
+### Short-term — Complete Phase 3 → Unblock Phase 6
+1. Evaluate triple-barrier search results — target precision ≥ 55%, recall ≥ 10%
+2. If results are strong, update `binary_predictor.py` to load new champion (pass `take_profit`/`stop_loss` to `BinaryFeatureBuilder`)
+3. Paper trade the full BUY + SELL system for several weeks
+4. Monitor `paper_trade_log/signals.csv` and open positions daily
+5. Build a simple backtesting framework against the existing parquet files
 
 ### Medium-term — Phase 7 Refinement
-1. Add market context features (SPY trend, VIX level, sector ETF performance)
-2. Implement walk-forward validation to check for overfitting over time
-3. Ensemble multiple BUY or SELL champion models
-4. Evaluate lowering SELL `sell_threshold` from 0.5% — may be too hair-trigger for real trading
+1. Consider replacing SELL ML model with trailing stop + fixed take-profit (simpler, faster, exits don't need to be predicted)
+2. Add market context features (SPY trend, VIX level, sector ETF performance)
+3. Implement walk-forward validation to check for overfitting over time
+4. Ensemble multiple BUY champion models
+5. Add MACD and Bollinger Bands to the feature set
 
 ### Long-term — Production
 1. Paper trade for 1+ months with consistent positive P&L before going live

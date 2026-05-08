@@ -34,8 +34,9 @@ logging.basicConfig(
     format='%(asctime)s - %(levelname)s - %(message)s'
 )
 
-SIGNAL_LOG = "paper_trade_log/signals.csv"
-ORDER_LOG   = "paper_trade_log/orders.csv"
+SIGNAL_LOG    = "paper_trade_log/signals.csv"
+ORDER_LOG     = "paper_trade_log/orders.csv"
+MAX_POSITIONS = 20
 
 # 'side' = BUY or SELL; 'signal_fired' = whether the detector triggered
 SIGNAL_FIELDS = [
@@ -293,12 +294,20 @@ def run_scan(symbols=None, min_confidence=0.6, dry_run=False):
     if symbols is None:
         symbols = trader.get_watchlist()
 
-    buy_candidates = [s for s in symbols if s not in held]
+    buy_candidates  = [s for s in symbols if s not in held]
+    open_slots      = max(0, MAX_POSITIONS - len(held))
     logging.info(
         f"--- BUY pass: {len(buy_candidates)} candidates "
-        f"({len(symbols) - len(buy_candidates)} skipped — already held) ---"
+        f"({len(symbols) - len(buy_candidates)} skipped — already held) | "
+        f"position slots available: {open_slots}/{MAX_POSITIONS} ---"
     )
 
+    if open_slots == 0:
+        logging.info("  At position limit — BUY pass skipped.")
+        buy_candidates = []
+
+    # Step 1: Score all candidates
+    scored_candidates = []
     for symbol in buy_candidates:
         try:
             df = trader.fetch_recent_data(symbol)
@@ -313,56 +322,78 @@ def run_scan(symbols=None, min_confidence=0.6, dry_run=False):
                 logging.warning(f"{symbol}: BUY features could not be built")
                 continue
 
-            action = 'NO_ACTION'
-
-            if prediction['is_buy'] and prediction['probability'] >= min_confidence:
-                if dry_run:
-                    action = 'DRY_RUN_BUY'
-                    logging.info(
-                        f"{symbol}: [DRY RUN] BUY  prob={prediction['probability']:.4f}  "
-                        f"@ ${current_price:.2f}"
-                    )
-                else:
-                    qty         = trader.calculate_position_size(symbol, current_price)
-                    take_profit = round(current_price * 1.02, 2)
-                    stop_loss   = round(current_price * 0.99, 2)
-
-                    order = conn.place_bracket_order(
-                        symbol=symbol,
-                        qty=qty,
-                        entry_price=current_price,
-                        take_profit=take_profit,
-                        stop_loss=stop_loss,
-                    )
-                    action = 'BUY_ORDER'
-                    log_order(symbol, 'BUY', qty, current_price,
-                              take_profit, stop_loss, order,
-                              prediction['probability'])
-                    session_orders.append(('BUY', symbol))
-                    logging.info(
-                        f"{symbol}: BUY ORDER  qty={qty}  "
-                        f"prob={prediction['probability']:.4f}  @ ${current_price:.2f}  "
-                        f"TP=${take_profit}  SL=${stop_loss}"
-                    )
-            else:
-                logging.info(
-                    f"{symbol}: no signal  prob={prediction['probability']:.4f}  "
-                    f"(threshold={prediction['threshold']:.4f})"
-                )
-
-            log_signal(symbol, 'BUY', prediction, action, current_price)
-            session_signals.append({
-                'symbol':      symbol,
-                'side':        'BUY',
-                'probability': prediction['probability'],
-                'fired':       prediction['is_buy'],
-                'action':      action,
-                'price':       current_price,
-            })
+            scored_candidates.append((symbol, prediction, current_price))
+            logging.info(
+                f"{symbol}: scored  prob={prediction['probability']:.4f}  "
+                f"(threshold={prediction['threshold']:.4f})"
+            )
 
         except Exception as e:
             logging.error(f"{symbol} (BUY pass): {e}")
             continue
+
+    # Step 2: Rank by probability, keep top N (capped by open slots and 5-per-run limit)
+    scored_candidates.sort(key=lambda x: x[1]['probability'], reverse=True)
+    max_buys     = min(5, open_slots)
+    top5_symbols = {s for s, _, _ in scored_candidates[:max_buys]}
+    logging.info(
+        f"  Top {max_buys} of {len(scored_candidates)} scored: "
+        f"{[s for s, _, _ in scored_candidates[:max_buys]]}"
+    )
+
+    # Step 3: Act on top 5 only; log all
+    for symbol, prediction, current_price in scored_candidates:
+        action = 'NO_ACTION'
+        in_top5 = symbol in top5_symbols
+
+        if in_top5 and prediction['is_buy'] and prediction['probability'] >= min_confidence:
+            if dry_run:
+                action = 'DRY_RUN_BUY'
+                logging.info(
+                    f"{symbol}: [DRY RUN] BUY  prob={prediction['probability']:.4f}  "
+                    f"@ ${current_price:.2f}"
+                )
+            else:
+                qty         = trader.calculate_position_size(symbol, current_price)
+                take_profit = round(current_price * 1.02, 2)
+                stop_loss   = round(current_price * 0.99, 2)
+
+                order = conn.place_bracket_order(
+                    symbol=symbol,
+                    qty=qty,
+                    entry_price=current_price,
+                    take_profit=take_profit,
+                    stop_loss=stop_loss,
+                )
+                action = 'BUY_ORDER'
+                log_order(symbol, 'BUY', qty, current_price,
+                          take_profit, stop_loss, order,
+                          prediction['probability'])
+                session_orders.append(('BUY', symbol))
+                logging.info(
+                    f"{symbol}: BUY ORDER  qty={qty}  "
+                    f"prob={prediction['probability']:.4f}  @ ${current_price:.2f}  "
+                    f"TP=${take_profit}  SL=${stop_loss}"
+                )
+        elif not in_top5:
+            logging.info(
+                f"{symbol}: skipped (not top 5)  prob={prediction['probability']:.4f}"
+            )
+        else:
+            logging.info(
+                f"{symbol}: no signal  prob={prediction['probability']:.4f}  "
+                f"(threshold={prediction['threshold']:.4f})"
+            )
+
+        log_signal(symbol, 'BUY', prediction, action, current_price)
+        session_signals.append({
+            'symbol':      symbol,
+            'side':        'BUY',
+            'probability': prediction['probability'],
+            'fired':       prediction['is_buy'],
+            'action':      action,
+            'price':       current_price,
+        })
 
     # Session summary
     buy_signals  = [s for s in session_signals if s['side'] == 'BUY'  and s['fired']]
