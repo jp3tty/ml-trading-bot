@@ -513,8 +513,7 @@ class BinaryHyperparameterSearch:
         logging.info(f"Results saved to {results_path}")
 
         if self.champion:
-            model_path = f"{self.results_dir}/champion_binary_{self.timestamp}.pkl"
-            joblib.dump({
+            model_data = {
                 'model':     self.champion['model'],
                 'scaler':    self.champion['scaler'],
                 'threshold': self.champion['threshold'],
@@ -523,7 +522,10 @@ class BinaryHyperparameterSearch:
                 'recall':    self.champion['recall'],
                 'f1':        self.champion['f1'],
                 'win_rate':  self.champion['win_rate']
-            }, model_path)
+            }
+            model_path = f"{self.results_dir}/champion_buy.pkl"
+            joblib.dump(model_data, model_path)
+            logging.info(f"Champion model saved to {model_path}")
             self._save_champion_json()
 
 

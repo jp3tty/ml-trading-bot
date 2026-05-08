@@ -71,11 +71,15 @@ class BinaryBuyPredictor:
 
     def _find_latest_champion(self):
         """Find most recent champion model file."""
+        fixed = os.path.join(self.results_dir, "champion_buy.pkl")
+        if os.path.exists(fixed):
+            return fixed
+        # Fall back to legacy timestamped files
         pattern = os.path.join(self.results_dir, "champion_binary_*.pkl")
         files = sorted(glob.glob(pattern))
         if not files:
             raise FileNotFoundError(
-                f"No champion models found matching: {pattern}\n"
+                f"No champion model found at {fixed} and no timestamped fallback.\n"
                 "Run ml/binary_search.py first to train a champion model."
             )
         return files[-1]

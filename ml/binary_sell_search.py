@@ -518,8 +518,6 @@ class SellHyperparameterSearch:
             logging.info(f"Results saved to {results_path}")
 
         if self.champion:
-            model_path = f"{self.results_dir}/champion_sell_{timestamp}.pkl"
-
             save_data = {
                 'model':     self.champion['model'],
                 'scaler':    self.champion['scaler'],
@@ -529,6 +527,7 @@ class SellHyperparameterSearch:
                 'recall':    self.champion['recall'],
                 'f1':        self.champion['f1'],
             }
+            model_path = f"{self.results_dir}/champion_sell.pkl"
             joblib.dump(save_data, model_path)
             logging.info(f"Champion model saved to {model_path}")
 

@@ -16,9 +16,11 @@ saved_data/historical/
 *.parquet
 *.pkl
 
-# But keep the directory structure
+# But keep the directory structure and active champion models
 !saved_data/.gitkeep
 !models/.gitkeep
+!models/binary_search_results/champion_buy.pkl
+!models/sell_search_results/champion_sell.pkl
 
 # Logs
 *.log
