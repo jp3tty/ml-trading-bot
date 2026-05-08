@@ -28,6 +28,7 @@ class AlpacaConnection:
     """REST-only Alpaca client (historical data, account, bracket orders)."""
 
     def __init__(self, paper=True):
+        self.paper = paper
         base_url = (
             "https://paper-api.alpaca.markets"
             if paper

@@ -167,7 +167,8 @@ class MLTrader:
         """
         logging.info("=" * 50)
         logging.info(f"ML Trader started at {datetime.now()}")
-        logging.info(f"Mode: {'DRY RUN' if dry_run else 'LIVE TRADING'}")
+        mode = 'DRY RUN' if dry_run else ('PAPER' if self.conn.paper else 'LIVE')
+        logging.info(f"Mode: {mode}")
         logging.info("=" * 50)
 
         clock = self.conn.api.get_clock()
