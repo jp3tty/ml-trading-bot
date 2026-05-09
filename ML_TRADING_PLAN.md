@@ -614,7 +614,7 @@ pip install scikit-learn xgboost pycatch22 pyarrow joblib pandas numpy
   - Champion selection now ranks by recall, not F1
   - `min_recall` removed from search space (redundant — optimizer directly maximizes it)
   - Precision floor lowered from 0.48 → 0.35–0.40 (enough to avoid commission drag)
-- [ ] Run search with recall-optimized objective
+- [x] Run search with recall-optimized objective — champion: Random Forest, window=21, horizon=9, take_profit=0.8%, stop_loss=0.5%, threshold=0.005, precision=37.1%, recall=100%, F1=0.541
 
 ### Phase 4: BUY Detector Integration ✅
 - [x] Create `ml/binary_predictor.py`
@@ -631,7 +631,7 @@ pip install scikit-learn xgboost pycatch22 pyarrow joblib pandas numpy
 - [x] Create `ml/binary_sell_predictor.py`
 - [x] Integrate with ml_trader.py
 
-### Phase 6: Full Integration 🔄
+### Phase 6: Full Integration ✅ / 🔄 Active
 - [x] Combine BUY and SELL detectors in ml_trader.py
 - [x] Implement position management logic
   - [x] `get_held_positions()` — fetch all open Alpaca positions once per run as `{symbol: position}`
@@ -639,8 +639,9 @@ pip install scikit-learn xgboost pycatch22 pyarrow joblib pandas numpy
   - [x] BUY pass skips any symbol already held; SELL pass is independent of the watchlist
   - [x] `paper_trade_validator.py` mirrors the same two-pass logic with per-side signal logging
 - [x] Dry run confirmed — both detectors load and scan without errors (2026-04-15)
-- [ ] **BUY threshold issue** — current champion threshold (0.826) is too conservative; no BUY signals fire in live scans. Options: re-train with lower `min_precision`, or manually lower threshold for paper testing
-- [ ] Paper trade complete system (BUY + SELL together) — blocked on BUY threshold fix
+- [x] BUY threshold fixed — lowered `--confidence` to 0.45 in CI workflow to match model's actual probability range (2026-05-08)
+- [x] Paper trading active — full BUY + SELL system running via GitHub Actions (2026-05-08)
+- [ ] Monitor paper trade results and P&L
 - [ ] Build backtesting framework
 
 ### Phase 7: Refinement ⏳
@@ -867,23 +868,18 @@ df['rel_strength'] = df['close'].pct_change(20) - spy_df['close'].pct_change(20)
 
 ## Next Steps
 
-### Immediate — BUY Search with Recall-Optimized Objective (2026-05-06)
-The BUY detector has been reframed to optimize recall. Run the next search:
+### Immediate — Monitor Paper Trading (2026-05-08)
+Full BUY + SELL system is live on paper trading. Monitor:
+- `paper_trade_log/signals.csv` — all signals scored per run
+- `paper_trade_log/orders.csv` — all orders placed with entry/TP/SL
+- Alpaca paper trading dashboard — open positions, P&L
 
-```bash
-caffeinate -i poetry run python -m ml.binary_search --quick
-```
+Runs automatically at 9:30 AM and 1:30 PM ET, Mon–Fri via GitHub Actions.
 
-Search space: `take_profit ∈ [0.008, 0.010, 0.015]`, `stop_loss ∈ [0.005, 0.008]`,
-`min_precision ∈ [0.35, 0.40]`. Threshold optimizer maximizes recall subject to the precision floor.
-Champion ranked by recall. Features: `combined` (indicators + MACD + Bollinger Bands + multi-TF + catch22).
-
-### Short-term — Complete Phase 3 → Unblock Phase 6
-1. Evaluate triple-barrier search results — target precision ≥ 55%, recall ≥ 10%
-2. If results are strong, update `binary_predictor.py` to load new champion (pass `take_profit`/`stop_loss` to `BinaryFeatureBuilder`)
-3. Paper trade the full BUY + SELL system for several weeks
-4. Monitor `paper_trade_log/signals.csv` and open positions daily
-5. Build a simple backtesting framework against the existing parquet files
+### Short-term — Phase 6 Completion
+1. Paper trade the full system for several weeks to validate end-to-end behavior
+2. Build a simple backtesting framework against existing parquet files
+3. Assess whether precision=37.1% is sufficient given the SELL detector's fast exits
 
 ### Medium-term — Phase 7 Refinement
 1. Consider replacing SELL ML model with trailing stop + fixed take-profit (simpler, faster, exits don't need to be predicted)

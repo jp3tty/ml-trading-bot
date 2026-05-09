@@ -203,7 +203,7 @@ poetry run python ml_trader.py \
 |------|-------------|
 | `--dry-run` | Preview trades without executing |
 | `--symbols` | Specific tickers to scan for BUY signals |
-| `--confidence` | Min BUY confidence threshold (default: 0.6) |
+| `--confidence` | Min BUY confidence threshold (default: 0.45) |
 | `--model` | Path to BUY champion `.pkl` (default: latest) |
 | `--sell-model` | Path to SELL champion `.pkl` (default: latest) |
 | `--live` | Use live trading instead of paper |
@@ -230,18 +230,16 @@ Each run executes two passes:
 | Parameter | Value |
 |-----------|-------|
 | Classifier | Random Forest |
-| Window size | 30 bars |
+| Window size | 21 bars |
 | Horizon | 9 bars |
-| Take profit | 0.5% |
-| Stop loss | 0.3% |
-| Decision threshold | 0.507 |
-| Precision | 48.0% |
-| Recall | 31.0% |
-| F1 | 0.377 |
+| Take profit | 0.8% |
+| Stop loss | 0.5% |
+| Decision threshold | 0.005 |
+| Precision | 37.1% |
+| Recall | 100.0% |
+| F1 | 0.541 |
 | Feature mode | combined |
 | Labeling | Triple-barrier |
-
-> **Note:** The above champion was produced before triple-barrier labeling was introduced and does not yet reflect the new search. A new search with triple-barrier labels is the active next step.
 
 ### SELL Detector (Current Champion)
 
@@ -298,16 +296,13 @@ Default filters (configurable in `stock_picker/stock_screener.py`):
 |-------|-------------|--------|
 | 1 | Data collection (daily + 4h parquet) | ✅ Complete |
 | 2 | Feature engineering (catch22 + indicators + combined) | ✅ Complete |
-| 3 | BUY detector training + champion selection | 🔄 In progress |
+| 3 | BUY detector training + champion selection | ✅ Complete |
 | 4 | BUY detector integrated into trading loop | ✅ Complete |
 | 5 | SELL detector training + champion selection | ✅ Complete |
-| 6 | Full BUY + SELL integration + paper trading | ⏳ Blocked on Phase 3 |
+| 6 | Full BUY + SELL integration + paper trading | 🔄 In progress |
 | 7 | Refinement (ensemble, market context, walk-forward) | ⏳ Planned |
 
-**Active work:** Switched BUY labeling to triple-barrier method (Lopez de Prado). Running new
-hyperparameter search with `take_profit` + `stop_loss` barriers, dual precision/recall constraints,
-and combined feature mode. Previous fixed-horizon approach produced near-zero recall across all
-parameter combinations, making the champion model effectively non-functional for live trading.
+**Active work:** Full BUY + SELL system running on paper trading via GitHub Actions (9:30 AM and 1:30 PM ET, Mon–Fri). Monitoring trade execution and P&L to validate the end-to-end pipeline before moving to Phase 7 refinement.
 
 ## Development Roadmap
 
