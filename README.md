@@ -66,6 +66,11 @@ ml-trading-bot/
 ├── ml_trader.py                         # Main trading orchestrator (cron job)
 ├── paper_trade_validator.py             # Paper trading validation + signal log
 ├── techAnalysis.py                      # RSI, momentum, candlestick patterns
+├── dashboard/
+│   ├── app.py                           # Streamlit monitoring dashboard
+│   └── requirements.txt                 # Streamlit Cloud dependencies
+├── .streamlit/
+│   └── secrets.toml.example             # Credential setup template
 ├── data_collection/
 │   ├── historical_collector.py          # Bulk daily data fetching
 │   └── historical_collector_4h.py       # 4-hour data fetching
@@ -83,8 +88,8 @@ ml-trading-bot/
 │   ├── binary_search_results/           # BUY champion models + search CSVs
 │   └── sell_search_results/             # SELL champion models + search CSVs
 ├── paper_trade_log/
-│   ├── signals.csv                      # All BUY/SELL signals logged per run
-│   └── orders.csv                       # All orders placed (paper or live)
+│   ├── signals.csv                      # All BUY/SELL signals scored per run
+│   └── orders.csv                       # All orders placed with indicators
 ├── saved_data/
 │   ├── historical/                      # Daily parquet files
 │   └── historical_4h/                   # 4-hour parquet files
@@ -277,10 +282,38 @@ The BUY threshold is chosen to maximize recall subject to the precision floor. T
 | File | Description |
 |------|-------------|
 | `paper_trade_log/signals.csv` | Every BUY/SELL signal scored per run |
-| `paper_trade_log/orders.csv` | Every order placed with entry/TP/SL |
+| `paper_trade_log/orders.csv` | Every order placed with entry/TP/SL/RSI/momentum |
 | `models/binary_search_results/` | BUY champion `.pkl` + search results `.csv` |
 | `models/sell_search_results/` | SELL champion `.pkl` + search results `.csv` |
 | `saved_data/historical_4h/*.parquet` | 4-hour OHLCV data per ticker |
+
+## Monitoring Dashboard
+
+A Streamlit dashboard at `dashboard/app.py` provides live visibility into paper trading results:
+
+| Section | Content |
+|---------|---------|
+| Account Summary | Portfolio value, buying power, day P&L |
+| Active Positions | Open positions with entry price, current price, unrealized P&L, RSI and momentum at entry |
+| Trade History | Entry/exit date, entry/exit price, P&L, exit type (Take Profit / Stop Loss / SELL Signal), entry indicators |
+| Signal Log | Full history of all tickers scored per run |
+
+After each run, the GitHub Actions workflow automatically commits updated `orders.csv` and `signals.csv` back to the repo so the dashboard always reflects the latest data.
+
+### Run locally
+
+```bash
+cp .streamlit/secrets.toml.example .streamlit/secrets.toml
+# fill in your Alpaca API keys in secrets.toml
+streamlit run dashboard/app.py
+```
+
+### Deploy to Streamlit Community Cloud
+
+1. Connect your GitHub repo at [share.streamlit.io](https://share.streamlit.io)
+2. Set **Main file path** to `dashboard/app.py`
+3. Set **Requirements file** to `dashboard/requirements.txt`
+4. Add `ALPACA_API_KEY` and `ALPACA_SECRET_KEY` under **Secrets**
 
 ## FinViz Screening Criteria
 
@@ -300,9 +333,10 @@ Default filters (configurable in `stock_picker/stock_screener.py`):
 | 4 | BUY detector integrated into trading loop | ✅ Complete |
 | 5 | SELL detector training + champion selection | ✅ Complete |
 | 6 | Full BUY + SELL integration + paper trading | 🔄 In progress |
+| 6a | Streamlit monitoring dashboard | 🔄 Built — deploy pending |
 | 7 | Refinement (ensemble, market context, walk-forward) | ⏳ Planned |
 
-**Active work:** Full BUY + SELL system running on paper trading via GitHub Actions (9:30 AM and 1:30 PM ET, Mon–Fri). Monitoring trade execution and P&L to validate the end-to-end pipeline before moving to Phase 7 refinement.
+**Active work:** Full BUY + SELL system running on paper trading via GitHub Actions (9:30 AM and 1:30 PM ET, Mon–Fri). Streamlit dashboard built and ready to deploy to Streamlit Community Cloud for live monitoring.
 
 ## Development Roadmap
 

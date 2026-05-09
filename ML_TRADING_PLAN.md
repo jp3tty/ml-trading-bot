@@ -641,7 +641,14 @@ pip install scikit-learn xgboost pycatch22 pyarrow joblib pandas numpy
 - [x] Dry run confirmed — both detectors load and scan without errors (2026-04-15)
 - [x] BUY threshold fixed — lowered `--confidence` to 0.45 in CI workflow to match model's actual probability range (2026-05-08)
 - [x] Paper trading active — full BUY + SELL system running via GitHub Actions (2026-05-08)
-- [ ] Monitor paper trade results and P&L
+- [x] Trade logging enhanced — `ml_trader.py` writes RSI, momentum, and order ID to `orders.csv` at BUY/SELL time (2026-05-09)
+- [x] Streamlit dashboard built — `dashboard/app.py` shows account value, active positions, trade history with entry/exit indicators, and signal log (2026-05-09)
+- [x] CI auto-commits trade logs — workflow commits updated `orders.csv` and `signals.csv` after each run so dashboard data stays current (2026-05-09)
+- [ ] **Deploy dashboard to Streamlit Community Cloud** ← next step
+  1. Connect repo at [share.streamlit.io](https://share.streamlit.io)
+  2. Main file: `dashboard/app.py` · Requirements: `dashboard/requirements.txt`
+  3. Add `ALPACA_API_KEY` and `ALPACA_SECRET_KEY` under Secrets
+- [ ] Monitor paper trade results and P&L via dashboard
 - [ ] Build backtesting framework
 
 ### Phase 7: Refinement ⏳
@@ -868,18 +875,20 @@ df['rel_strength'] = df['close'].pct_change(20) - spy_df['close'].pct_change(20)
 
 ## Next Steps
 
-### Immediate — Monitor Paper Trading (2026-05-08)
-Full BUY + SELL system is live on paper trading. Monitor:
-- `paper_trade_log/signals.csv` — all signals scored per run
-- `paper_trade_log/orders.csv` — all orders placed with entry/TP/SL
-- Alpaca paper trading dashboard — open positions, P&L
+### Immediate — Deploy Streamlit Dashboard (2026-05-09)
+Dashboard is built at `dashboard/app.py`. Deploy to Streamlit Community Cloud:
+1. Go to [share.streamlit.io](https://share.streamlit.io) and connect the GitHub repo
+2. Set **Main file path** → `dashboard/app.py`
+3. Set **Requirements file** → `dashboard/requirements.txt`
+4. Add `ALPACA_API_KEY` and `ALPACA_SECRET_KEY` under **Secrets**
 
-Runs automatically at 9:30 AM and 1:30 PM ET, Mon–Fri via GitHub Actions.
+Once deployed, the dashboard auto-updates after every trading run (CI commits fresh CSVs to the repo).
 
 ### Short-term — Phase 6 Completion
-1. Paper trade the full system for several weeks to validate end-to-end behavior
-2. Build a simple backtesting framework against existing parquet files
-3. Assess whether precision=37.1% is sufficient given the SELL detector's fast exits
+1. Monitor paper trade results and P&L via the Streamlit dashboard
+2. Paper trade the full system for several weeks to validate end-to-end behavior
+3. Build a simple backtesting framework against existing parquet files
+4. Assess whether precision=37.1% is sufficient given the SELL detector's fast exits
 
 ### Medium-term — Phase 7 Refinement
 1. Consider replacing SELL ML model with trailing stop + fixed take-profit (simpler, faster, exits don't need to be predicted)
