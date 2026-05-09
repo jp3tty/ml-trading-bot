@@ -1,4 +1,5 @@
 import argparse
+import csv
 import logging
 import os
 import sys
@@ -10,6 +11,7 @@ from alpaca_trade_api.rest import TimeFrame
 from alpaca_trading import AlpacaConnection
 from ml.binary_predictor import BinaryBuyPredictor
 from ml.binary_sell_predictor import BinarySellPredictor
+from techAnalysis import TechnicalAnalysis
 
 logging.basicConfig(
     level=logging.INFO,
@@ -17,6 +19,49 @@ logging.basicConfig(
 )
 
 MAX_POSITIONS = 20
+
+ORDER_LOG    = "paper_trade_log/orders.csv"
+ORDER_FIELDS = [
+    'timestamp', 'symbol', 'side', 'qty', 'entry_price',
+    'take_profit', 'stop_loss', 'order_id', 'confidence', 'rsi', 'momentum',
+]
+
+_ta = TechnicalAnalysis()
+
+
+def _get_indicators(df):
+    try:
+        enhanced = _ta.momentum_trend(df.copy())
+        last = enhanced.iloc[-1]
+        return {
+            'rsi':      round(float(last['rsi']), 1),
+            'momentum': round(float(last['momentum_strength']), 4),
+        }
+    except Exception:
+        return {'rsi': None, 'momentum': None}
+
+
+def _log_order(symbol, side, qty, entry_price, take_profit, stop_loss,
+               order_id, confidence, rsi, momentum):
+    row = {
+        'timestamp':   datetime.now().isoformat(),
+        'symbol':      symbol,
+        'side':        side,
+        'qty':         qty,
+        'entry_price': entry_price,
+        'take_profit': take_profit,
+        'stop_loss':   stop_loss,
+        'order_id':    order_id,
+        'confidence':  round(confidence, 4),
+        'rsi':         rsi,
+        'momentum':    momentum,
+    }
+    file_exists = os.path.isfile(ORDER_LOG) and os.path.getsize(ORDER_LOG) > 0
+    with open(ORDER_LOG, 'a', newline='') as f:
+        writer = csv.DictWriter(f, fieldnames=ORDER_FIELDS)
+        if not file_exists:
+            writer.writeheader()
+        writer.writerow(row)
 
 class MLTrader:
     def __init__(self, model_path=None, sell_model_path=None, paper=True):
@@ -148,8 +193,9 @@ class MLTrader:
 
         elif signal == 'SELL':
             try:
-                self.conn.api.close_position(symbol)
+                order = self.conn.api.close_position(symbol)
                 logging.info(f"SELL: Closed position in {symbol}")
+                return order
             except Exception as e:
                 logging.error(f"Error closing position for {symbol}: {e}")
 
@@ -213,6 +259,16 @@ class MLTrader:
                     else:
                         order = self.execute_trade(symbol, 'SELL', confidence, current_price)
                         if order:
+                            ind = _get_indicators(df)
+                            _log_order(
+                                symbol=symbol, side='SELL',
+                                qty=float(getattr(position, 'qty', 0)),
+                                entry_price=current_price,
+                                take_profit=0, stop_loss=0,
+                                order_id=getattr(order, 'id', 'N/A'),
+                                confidence=confidence,
+                                rsi=ind['rsi'], momentum=ind['momentum'],
+                            )
                             trades_executed.append({
                                 'symbol': symbol,
                                 'signal': 'SELL',
@@ -292,6 +348,17 @@ class MLTrader:
                 else:
                     order = self.execute_trade(symbol, 'BUY', confidence, current_price)
                     if order:
+                        ind = _get_indicators(df)
+                        _log_order(
+                            symbol=symbol, side='BUY',
+                            qty=int(getattr(order, 'qty', 0)),
+                            entry_price=current_price,
+                            take_profit=round(current_price * 1.02, 2),
+                            stop_loss=round(current_price * 0.99, 2),
+                            order_id=getattr(order, 'id', 'N/A'),
+                            confidence=confidence,
+                            rsi=ind['rsi'], momentum=ind['momentum'],
+                        )
                         trades_executed.append({
                             'symbol': symbol,
                             'signal': 'BUY',
@@ -313,7 +380,7 @@ def main():
     parser = argparse.ArgumentParser(description="ML-based stock trader")
     parser.add_argument('--dry-run', action='store_true', help='Preview without trading')
     parser.add_argument('--symbols', nargs='+', help='Specific symbols to analyze')
-    parser.add_argument('--confidence', type=float, default=0.6, help='Minimum confidence threshold')
+    parser.add_argument('--confidence', type=float, default=0.45, help='Minimum confidence threshold')
     parser.add_argument('--model', default=None, help='Path to BUY champion .pkl (default: latest)')
     parser.add_argument('--sell-model', default=None, help='Path to SELL champion .pkl (default: latest)')
     parser.add_argument('--live', action='store_true', help='Use live trading (default: paper)')

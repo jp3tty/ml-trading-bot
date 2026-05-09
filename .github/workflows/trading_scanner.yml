@@ -33,3 +33,11 @@ jobs:
           ALPACA_API_KEY: ${{ secrets.ALPACA_API_KEY }}
           ALPACA_SECRET_KEY: ${{ secrets.ALPACA_SECRET_KEY }}
         run: poetry run python ml_trader.py --confidence 0.45
+
+      - name: Commit trade logs
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add paper_trade_log/
+          git diff --staged --quiet || git commit -m "Update trade logs [skip ci]"
+          git push

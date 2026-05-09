@@ -40,5 +40,7 @@ poetry.lock  # Optional: some prefer to commit this
 # Secrets
 *.txt
 !README.md
+!dashboard/requirements.txt
+.streamlit/secrets.toml
 authenticator_app.txt.claude/worktrees/
 .claude/worktrees/
