@@ -68,7 +68,7 @@ def get_tickers(url=None, delay=1):
 
         if all_data:
             combined_df = pd.concat(all_data, ignore_index=True)
-            tickers = combined_df['Ticker'].tolist()
+            tickers = list(dict.fromkeys(combined_df['Ticker'].tolist()))
             logging.info(f"Found {len(tickers)} tickers")
             return tickers
         else:
