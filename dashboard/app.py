@@ -3,7 +3,9 @@ import os
 import pandas as pd
 import plotly.express as px
 import streamlit as st
-import alpaca_trade_api as tradeapi
+from alpaca.trading.client import TradingClient
+from alpaca.trading.requests import GetOrdersRequest
+from alpaca.trading.enums import QueryOrderStatus
 
 st.set_page_config(page_title="ML Trading Dashboard", layout="wide", page_icon="📈")
 st.title("ML Trading Dashboard")
@@ -12,21 +14,20 @@ st.caption("Paper Trading · Data refreshes every 60s (account/positions) or 5 m
 
 # ── Alpaca connection ──────────────────────────────────────────────────────────
 
-@st.cache_resource
-def get_api():
+def get_client():
     key    = st.secrets.get("ALPACA_API_KEY")    or os.getenv("ALPACA_API_KEY")
     secret = st.secrets.get("ALPACA_SECRET_KEY") or os.getenv("ALPACA_SECRET_KEY")
     if not key or not secret:
-        st.error("Alpaca credentials not found. Add ALPACA_API_KEY and ALPACA_SECRET_KEY to .streamlit/secrets.toml.")
+        st.error("Alpaca credentials not found. Add ALPACA_API_KEY and ALPACA_SECRET_KEY to Streamlit Secrets.")
         st.stop()
-    return tradeapi.REST(key, secret, base_url="https://paper-api.alpaca.markets")
+    return TradingClient(api_key=key, secret_key=secret, paper=True)
 
 
 # ── Data helpers ───────────────────────────────────────────────────────────────
 
 @st.cache_data(ttl=60)
 def fetch_account():
-    a = get_api().get_account()
+    a = get_client().get_account()
     return {
         'portfolio_value': float(a.portfolio_value),
         'buying_power':    float(a.buying_power),
@@ -37,7 +38,7 @@ def fetch_account():
 @st.cache_data(ttl=60)
 def fetch_positions():
     rows = []
-    for p in get_api().list_positions():
+    for p in get_client().get_all_positions():
         rows.append({
             'symbol':        p.symbol,
             'qty':           float(p.qty),
@@ -50,17 +51,20 @@ def fetch_positions():
 
 @st.cache_data(ttl=300)
 def fetch_filled_orders():
-    orders = get_api().list_orders(status='filled', limit=500, direction='desc')
+    request = GetOrdersRequest(status=QueryOrderStatus.CLOSED, limit=500)
+    orders = get_client().get_orders(filter=request)
     rows = []
     for o in orders:
+        if o.filled_avg_price is None:
+            continue
         rows.append({
-            'order_id':   o.id,
+            'order_id':   str(o.id),
             'symbol':     o.symbol,
-            'side':       o.side,
+            'side':       o.side.value,
             'qty':        float(o.filled_qty or 0),
-            'fill_price': float(o.filled_avg_price or 0),
+            'fill_price': float(o.filled_avg_price),
             'filled_at':  pd.to_datetime(o.filled_at, utc=True),
-            'order_type': o.order_class or o.type,
+            'order_type': str(o.order_class or o.type),
         })
     return pd.DataFrame(rows) if rows else pd.DataFrame()
 
@@ -106,7 +110,6 @@ orders_log = load_orders_log()
 if not positions.empty:
     display = positions.copy()
 
-    # Attach entry indicators from orders log if available
     if not orders_log.empty and 'rsi' in orders_log.columns:
         buys = orders_log[orders_log['side'] == 'BUY']
         latest_buys = buys.sort_values('timestamp').groupby('symbol').last().reset_index()
@@ -139,7 +142,6 @@ if not filled.empty:
     for _, buy in buys.iterrows():
         entry_price = buy['fill_price']
 
-        # Pull logged indicators for this symbol
         ind = {}
         if not orders_log.empty:
             match = orders_log[
@@ -154,17 +156,16 @@ if not filled.empty:
                 ind['take_profit'] = float(last.get('take_profit') or 0)
                 ind['stop_loss']   = float(last.get('stop_loss') or 0)
 
-        # Match the earliest sell for this symbol after the buy
         after = sells[
             (sells['symbol'] == buy['symbol']) &
             (sells['filled_at'] > buy['filled_at'])
         ]
 
         if not after.empty:
-            sell        = after.iloc[0]
-            exit_price  = sell['fill_price']
-            pl_pct      = (exit_price - entry_price) / entry_price * 100
-            pl_abs      = (exit_price - entry_price) * buy['qty']
+            sell       = after.iloc[0]
+            exit_price = sell['fill_price']
+            pl_pct     = (exit_price - entry_price) / entry_price * 100
+            pl_abs     = (exit_price - entry_price) * buy['qty']
 
             tp = ind.get('take_profit', 0)
             sl = ind.get('stop_loss', 0)
@@ -176,30 +177,30 @@ if not filled.empty:
                 exit_via = '🤖 SELL Signal'
 
             rows.append({
-                'Symbol':        buy['symbol'],
-                'Entry Date':    buy['filled_at'].strftime('%Y-%m-%d %H:%M'),
-                'Exit Date':     sell['filled_at'].strftime('%Y-%m-%d %H:%M'),
-                'Entry Price':   f"${entry_price:.2f}",
-                'Exit Price':    f"${exit_price:.2f}",
-                'P&L':           f"${pl_abs:+.2f}",
-                'P&L %':         f"{pl_pct:+.1f}%",
-                'Exit Via':      exit_via,
-                'Confidence':    ind.get('confidence', '—'),
-                'RSI at Entry':  ind.get('rsi', '—'),
+                'Symbol':         buy['symbol'],
+                'Entry Date':     buy['filled_at'].strftime('%Y-%m-%d %H:%M'),
+                'Exit Date':      sell['filled_at'].strftime('%Y-%m-%d %H:%M'),
+                'Entry Price':    f"${entry_price:.2f}",
+                'Exit Price':     f"${exit_price:.2f}",
+                'P&L':            f"${pl_abs:+.2f}",
+                'P&L %':          f"{pl_pct:+.1f}%",
+                'Exit Via':       exit_via,
+                'Confidence':     ind.get('confidence', '—'),
+                'RSI at Entry':   ind.get('rsi', '—'),
                 'Mom % at Entry': ind.get('momentum %', '—'),
             })
         else:
             rows.append({
-                'Symbol':        buy['symbol'],
-                'Entry Date':    buy['filled_at'].strftime('%Y-%m-%d %H:%M'),
-                'Exit Date':     '—',
-                'Entry Price':   f"${entry_price:.2f}",
-                'Exit Price':    '—',
-                'P&L':           '—',
-                'P&L %':         '—',
-                'Exit Via':      '⏳ Open',
-                'Confidence':    ind.get('confidence', '—'),
-                'RSI at Entry':  ind.get('rsi', '—'),
+                'Symbol':         buy['symbol'],
+                'Entry Date':     buy['filled_at'].strftime('%Y-%m-%d %H:%M'),
+                'Exit Date':      '—',
+                'Entry Price':    f"${entry_price:.2f}",
+                'Exit Price':     '—',
+                'P&L':            '—',
+                'P&L %':          '—',
+                'Exit Via':       '⏳ Open',
+                'Confidence':     ind.get('confidence', '—'),
+                'RSI at Entry':   ind.get('rsi', '—'),
                 'Mom % at Entry': ind.get('momentum %', '—'),
             })
 
@@ -207,7 +208,6 @@ if not filled.empty:
         history_df = pd.DataFrame(rows)
         st.dataframe(history_df, use_container_width=True, hide_index=True)
 
-        # Cumulative P&L chart for closed trades
         closed = history_df[~history_df['P&L %'].isin(['—', '⏳ Open'])].copy()
         if len(closed) >= 2:
             closed['pl_val'] = (
