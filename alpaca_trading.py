@@ -70,5 +70,5 @@ class AlpacaConnection:
             time_in_force="gtc",
             order_class="bracket",
             take_profit={"limit_price": take_profit},
-            stop_loss={"limit_price": stop_loss},
+            stop_loss={"stop_price": stop_loss},
         )
