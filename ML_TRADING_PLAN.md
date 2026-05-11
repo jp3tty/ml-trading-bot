@@ -644,10 +644,8 @@ pip install scikit-learn xgboost pycatch22 pyarrow joblib pandas numpy
 - [x] Trade logging enhanced — `ml_trader.py` writes RSI, momentum, and order ID to `orders.csv` at BUY/SELL time (2026-05-09)
 - [x] Streamlit dashboard built — `dashboard/app.py` shows account value, active positions, trade history with entry/exit indicators, and signal log (2026-05-09)
 - [x] CI auto-commits trade logs — workflow commits updated `orders.csv` and `signals.csv` after each run so dashboard data stays current (2026-05-09)
-- [ ] **Deploy dashboard to Streamlit Community Cloud** ← next step
-  1. Connect repo at [share.streamlit.io](https://share.streamlit.io)
-  2. Main file: `dashboard/app.py` · Requirements: `dashboard/requirements.txt`
-  3. Add `ALPACA_API_KEY` and `ALPACA_SECRET_KEY` under Secrets
+- [x] Switched dashboard to `alpaca-py` SDK — resolved persistent auth errors on Streamlit Cloud caused by the older `alpaca-trade-api` library (2026-05-11)
+- [x] Dashboard deployed to Streamlit Community Cloud — live and accessible (2026-05-11)
 - [ ] Monitor paper trade results and P&L via dashboard
 - [ ] Build backtesting framework
 
@@ -875,14 +873,10 @@ df['rel_strength'] = df['close'].pct_change(20) - spy_df['close'].pct_change(20)
 
 ## Next Steps
 
-### Immediate — Deploy Streamlit Dashboard (2026-05-09)
-Dashboard is built at `dashboard/app.py`. Deploy to Streamlit Community Cloud:
-1. Go to [share.streamlit.io](https://share.streamlit.io) and connect the GitHub repo
-2. Set **Main file path** → `dashboard/app.py`
-3. Set **Requirements file** → `dashboard/requirements.txt`
-4. Add `ALPACA_API_KEY` and `ALPACA_SECRET_KEY` under **Secrets**
-
-Once deployed, the dashboard auto-updates after every trading run (CI commits fresh CSVs to the repo).
+### Immediate — Monitor Paper Trading Results (2026-05-11)
+Dashboard is live on Streamlit Community Cloud. Auto-updates after every trading run via CI.
+- Watch for first real orders on Monday 2026-05-12 at 9:30 AM ET
+- Track P&L, exit types (TP/SL/SELL Signal), and indicator context per trade
 
 ### Short-term — Phase 6 Completion
 1. Monitor paper trade results and P&L via the Streamlit dashboard

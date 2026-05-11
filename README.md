@@ -312,8 +312,9 @@ streamlit run dashboard/app.py
 
 1. Connect your GitHub repo at [share.streamlit.io](https://share.streamlit.io)
 2. Set **Main file path** to `dashboard/app.py`
-3. Set **Requirements file** to `dashboard/requirements.txt`
-4. Add `ALPACA_API_KEY` and `ALPACA_SECRET_KEY` under **Secrets**
+3. Add `ALPACA_API_KEY` and `ALPACA_SECRET_KEY` under **Secrets**
+
+> **Note:** The dashboard uses the `alpaca-py` SDK (not the older `alpaca-trade-api`). Secrets only need the two keys above — no endpoint configuration required.
 
 ## FinViz Screening Criteria
 
@@ -333,10 +334,10 @@ Default filters (configurable in `stock_picker/stock_screener.py`):
 | 4 | BUY detector integrated into trading loop | ✅ Complete |
 | 5 | SELL detector training + champion selection | ✅ Complete |
 | 6 | Full BUY + SELL integration + paper trading | 🔄 In progress |
-| 6a | Streamlit monitoring dashboard | 🔄 Built — deploy pending |
+| 6a | Streamlit monitoring dashboard | ✅ Complete |
 | 7 | Refinement (ensemble, market context, walk-forward) | ⏳ Planned |
 
-**Active work:** Full BUY + SELL system running on paper trading via GitHub Actions (9:30 AM and 1:30 PM ET, Mon–Fri). Streamlit dashboard built and ready to deploy to Streamlit Community Cloud for live monitoring.
+**Active work:** Full BUY + SELL system running on paper trading via GitHub Actions (9:30 AM and 1:30 PM ET, Mon–Fri). Streamlit dashboard live on Streamlit Community Cloud — monitoring trade results and P&L as paper trading data accumulates.
 
 ## Development Roadmap
 
