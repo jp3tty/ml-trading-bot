@@ -178,13 +178,14 @@ class MLTrader:
             qty = self.calculate_position_size(symbol, current_price)
 
             # Set bracket order prices (2% profit target, 1% stop loss)
+            entry_price = round(current_price, 2)
             take_profit = round(current_price * 1.02, 2)
             stop_loss = round(current_price * 0.99, 2)
 
             order = self.conn.place_bracket_order(
                 symbol=symbol,
                 qty=qty,
-                entry_price=current_price,
+                entry_price=entry_price,
                 take_profit=take_profit,
                 stop_loss=stop_loss
             )
