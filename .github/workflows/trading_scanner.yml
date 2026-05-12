@@ -30,11 +30,11 @@ jobs:
           pip install poetry
           poetry install
 
-      - name: Run ML trader
+      - name: Run paper trade validator
         env:
           ALPACA_API_KEY: ${{ secrets.ALPACA_API_KEY }}
           ALPACA_SECRET_KEY: ${{ secrets.ALPACA_SECRET_KEY }}
-        run: poetry run python ml_trader.py --confidence 0.45
+        run: poetry run python paper_trade_validator.py --confidence 0.45
 
       - name: Commit trade logs
         run: |
