@@ -358,21 +358,22 @@ def run_scan(symbols=None, min_confidence=0.6, dry_run=False):
                 take_profit = round(current_price * 1.02, 2)
                 stop_loss   = round(current_price * 0.99, 2)
 
+                entry_price = round(current_price, 2)
                 order = conn.place_bracket_order(
                     symbol=symbol,
                     qty=qty,
-                    entry_price=current_price,
+                    entry_price=entry_price,
                     take_profit=take_profit,
                     stop_loss=stop_loss,
                 )
                 action = 'BUY_ORDER'
-                log_order(symbol, 'BUY', qty, current_price,
+                log_order(symbol, 'BUY', qty, entry_price,
                           take_profit, stop_loss, order,
                           prediction['probability'])
                 session_orders.append(('BUY', symbol))
                 logging.info(
                     f"{symbol}: BUY ORDER  qty={qty}  "
-                    f"prob={prediction['probability']:.4f}  @ ${current_price:.2f}  "
+                    f"prob={prediction['probability']:.4f}  @ ${entry_price}  "
                     f"TP=${take_profit}  SL=${stop_loss}"
                 )
         elif not in_top5:
