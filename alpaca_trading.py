@@ -67,7 +67,7 @@ class AlpacaConnection:
             side="buy",
             type="limit",
             limit_price=entry_price,
-            time_in_force="gtc",
+            time_in_force="day",
             order_class="bracket",
             take_profit={"limit_price": take_profit},
             stop_loss={"stop_price": stop_loss},
