@@ -2,10 +2,11 @@ name: Stock Scanner
 
 on:
   schedule:
-    # Runs at market-aligned 4-hour intervals (UTC times)
-    # 9:30 AM ET = 14:30 UTC, 1:30 PM ET = 18:30 UTC
-    - cron: '30 14 * * 1-5'  # 9:30 AM ET, Mon-Fri
-    - cron: '30 18 * * 1-5'  # 1:30 PM ET, Mon-Fri
+    # Scheduled with ~2h lag buffer to stay within market hours (9:30 AM–4 PM ET)
+    # 14:00 UTC = 10:00 AM EDT / 9:00 AM EST  → fires by 12:00 PM EDT worst case
+    # 17:00 UTC =  1:00 PM EDT / 12:00 PM EST → fires by  3:00 PM EDT worst case
+    - cron: '0 14 * * 1-5'  # morning scan, Mon-Fri
+    - cron: '0 17 * * 1-5'  # afternoon scan, Mon-Fri
 
   # Allow manual trigger for testing
   workflow_dispatch:
