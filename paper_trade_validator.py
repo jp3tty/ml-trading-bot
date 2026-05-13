@@ -200,7 +200,7 @@ def print_report():
         print("=" * 55)
 
 
-def run_scan(symbols=None, min_confidence=0.6, dry_run=False):
+def run_scan(symbols=None, min_confidence=0.6, min_sell_confidence=0.3, dry_run=False):
     ensure_log_files()
 
     conn   = AlpacaConnection(paper=True)
@@ -248,7 +248,7 @@ def run_scan(symbols=None, min_confidence=0.6, dry_run=False):
 
             action = 'NO_ACTION'
 
-            if prediction['is_sell']:
+            if prediction['is_sell'] and prediction['probability'] >= min_sell_confidence:
                 if dry_run:
                     action = 'DRY_RUN_SELL'
                     logging.info(
@@ -270,7 +270,8 @@ def run_scan(symbols=None, min_confidence=0.6, dry_run=False):
             else:
                 logging.info(
                     f"{symbol}: hold  prob={prediction['probability']:.4f}  "
-                    f"(threshold={prediction['threshold']:.4f})  "
+                    f"(model_threshold={prediction['threshold']:.4f}  "
+                    f"sell_confidence_floor={min_sell_confidence:.4f})  "
                     f"P&L={float(position.unrealized_plpc)*100:+.1f}%"
                 )
 
@@ -427,7 +428,8 @@ def main():
     parser.add_argument('--report',     action='store_true', help='Show log summary only (no scan)')
     parser.add_argument('--dry-run',    action='store_true', help='Scan but do not place orders')
     parser.add_argument('--symbols',    nargs='+',           help='Specific symbols to scan for BUY')
-    parser.add_argument('--confidence', type=float, default=0.6, help='Min BUY confidence threshold')
+    parser.add_argument('--confidence',      type=float, default=0.6,  help='Min BUY confidence threshold')
+    parser.add_argument('--sell-confidence', type=float, default=0.3,  help='Min SELL confidence floor (overrides model threshold)')
     args = parser.parse_args()
 
     if args.report:
@@ -437,6 +439,7 @@ def main():
     run_scan(
         symbols=args.symbols,
         min_confidence=args.confidence,
+        min_sell_confidence=args.sell_confidence,
         dry_run=args.dry_run,
     )
 

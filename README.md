@@ -179,6 +179,9 @@ poetry run python paper_trade_validator.py --report
 
 # Scan specific symbols
 poetry run python paper_trade_validator.py --dry-run --symbols AAPL TSLA NVDA
+
+# Override SELL confidence floor (default: 0.3)
+poetry run python paper_trade_validator.py --sell-confidence 0.4
 ```
 
 ### 5. Run the ML Trader
@@ -255,12 +258,15 @@ Each run executes two passes:
 | Horizon | 5 bars |
 | Sell threshold | 0.5% |
 | Decision threshold | 0.040 |
+| Runtime confidence floor | **0.30** |
 | Precision | 40.1% |
 | Recall | 100.0% |
 | F1 | 0.573 |
 | Feature mode | catch22 |
 
 Optimised for recall (fast exits). Champion selection requires `recall ≥ 20%` and `precision ≥ 40%`, ranked by F1.
+
+The model's baked-in decision threshold (0.040) is very sensitive by design. A **runtime confidence floor** (`--sell-confidence`, default `0.30`) is applied on top — the SELL signal only fires if the model's probability exceeds both the model threshold *and* this floor. This prevents hairpin exits on marginal signals without retraining.
 
 ### Feature Modes
 

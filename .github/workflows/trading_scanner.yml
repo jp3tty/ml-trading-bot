@@ -35,7 +35,7 @@ jobs:
         env:
           ALPACA_API_KEY: ${{ secrets.ALPACA_API_KEY }}
           ALPACA_SECRET_KEY: ${{ secrets.ALPACA_SECRET_KEY }}
-        run: poetry run python paper_trade_validator.py --confidence 0.45
+        run: poetry run python paper_trade_validator.py --confidence 0.45 --sell-confidence 0.3
 
       - name: Commit trade logs
         run: |

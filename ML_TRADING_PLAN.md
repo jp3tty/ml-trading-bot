@@ -646,6 +646,7 @@ pip install scikit-learn xgboost pycatch22 pyarrow joblib pandas numpy
 - [x] CI auto-commits trade logs — workflow commits updated `orders.csv` and `signals.csv` after each run so dashboard data stays current (2026-05-09)
 - [x] Switched dashboard to `alpaca-py` SDK — resolved persistent auth errors on Streamlit Cloud caused by the older `alpaca-trade-api` library (2026-05-11)
 - [x] Dashboard deployed to Streamlit Community Cloud — live and accessible (2026-05-11)
+- [x] Added runtime SELL confidence floor — `--sell-confidence 0.3` overrides the model's hairpin 0.040 threshold without retraining; SELL only fires when `probability ≥ 0.30` (2026-05-13)
 - [ ] Monitor paper trade results and P&L via dashboard
 - [ ] Build backtesting framework
 
@@ -873,10 +874,11 @@ df['rel_strength'] = df['close'].pct_change(20) - spy_df['close'].pct_change(20)
 
 ## Next Steps
 
-### Immediate — Monitor Paper Trading Results (2026-05-11)
+### Immediate — Monitor Paper Trading Results (2026-05-13)
 Dashboard is live on Streamlit Community Cloud. Auto-updates after every trading run via CI.
-- Watch for first real orders on Monday 2026-05-12 at 9:30 AM ET
-- Track P&L, exit types (TP/SL/SELL Signal), and indicator context per trade
+- System has been placing live paper orders since 2026-05-12
+- SELL confidence floor set to 0.30 (runtime override) to reduce hairpin exits from the model's raw 0.040 threshold
+- Track P&L, exit types (TP/SL/SELL Signal), and indicator context per trade as data accumulates
 
 ### Short-term — Phase 6 Completion
 1. Monitor paper trade results and P&L via the Streamlit dashboard
