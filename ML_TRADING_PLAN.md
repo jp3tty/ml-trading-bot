@@ -647,6 +647,7 @@ pip install scikit-learn xgboost pycatch22 pyarrow joblib pandas numpy
 - [x] Switched dashboard to `alpaca-py` SDK — resolved persistent auth errors on Streamlit Cloud caused by the older `alpaca-trade-api` library (2026-05-11)
 - [x] Dashboard deployed to Streamlit Community Cloud — live and accessible (2026-05-11)
 - [x] Added runtime SELL confidence floor — `--sell-confidence 0.3` overrides the model's hairpin 0.040 threshold without retraining; SELL only fires when `probability ≥ 0.30` (2026-05-13)
+- [x] Replaced fixed 1% stop loss with ATR-based safety net — stop set at `entry − 2.0 × ATR(14)`, giving each position room proportional to its actual volatility; take profit widened to 20% ceiling so the ML sell model handles normal exits; falls back to 3% if ATR is unavailable (2026-05-14)
 - [ ] Monitor paper trade results and P&L via dashboard
 - [ ] Build backtesting framework
 
