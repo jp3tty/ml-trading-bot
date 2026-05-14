@@ -205,7 +205,7 @@ if not filled.empty:
             })
 
     if rows:
-        history_df = pd.DataFrame(rows)
+        history_df = pd.DataFrame(rows).sort_values('Entry Date', ascending=False)
         st.dataframe(history_df, use_container_width=True, hide_index=True)
 
         closed = history_df[~history_df['P&L %'].isin(['—', '⏳ Open'])].copy()
