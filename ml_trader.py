@@ -28,6 +28,21 @@ ORDER_FIELDS = [
 
 _ta = TechnicalAnalysis()
 
+ATR_PERIOD     = 14
+ATR_MULTIPLIER = 2.0
+TAKE_PROFIT_PCT = 0.20  # wide ceiling — ML model handles normal exits
+
+
+def _calculate_atr(df, period=ATR_PERIOD):
+    high, low, close = df['high'], df['low'], df['close']
+    prev_close = close.shift(1)
+    tr = pd.concat(
+        [high - low, (high - prev_close).abs(), (low - prev_close).abs()],
+        axis=1,
+    ).max(axis=1)
+    atr = tr.rolling(period).mean().iloc[-1]
+    return float(atr) if pd.notna(atr) else None
+
 
 def _get_indicators(df):
     try:
@@ -172,24 +187,24 @@ class MLTrader:
             return True, prediction['probability']
         return False, 0.0
 
-    def execute_trade(self, symbol, signal, confidence, current_price):
+    def execute_trade(self, symbol, signal, confidence, current_price,
+                      stop_loss=None, take_profit=None):
         """Execute trade based on ML signal"""
         if signal == 'BUY':
-            qty = self.calculate_position_size(symbol, current_price)
-
-            # Set bracket order prices (2% profit target, 1% stop loss)
+            qty         = self.calculate_position_size(symbol, current_price)
             entry_price = round(current_price, 2)
-            take_profit = round(current_price * 1.02, 2)
-            stop_loss = round(current_price * 0.99, 2)
 
             order = self.conn.place_bracket_order(
                 symbol=symbol,
                 qty=qty,
                 entry_price=entry_price,
                 take_profit=take_profit,
-                stop_loss=stop_loss
+                stop_loss=stop_loss,
             )
-            logging.info(f"BUY order placed: {symbol} x{qty} at {current_price}")
+            logging.info(
+                f"BUY order placed: {symbol} x{qty} @ ${current_price:.2f} | "
+                f"stop=${stop_loss:.2f}  tp=${take_profit:.2f}"
+            )
             return order
 
         elif signal == 'SELL':
@@ -314,7 +329,7 @@ class MLTrader:
                 if prediction is None:
                     continue
 
-                scored_candidates.append((symbol, prediction, current_price))
+                scored_candidates.append((symbol, prediction, current_price, df))
                 logging.info(
                     f"{symbol}: scored  BUY={'YES' if prediction['is_buy'] else 'NO'} "
                     f"(prob={prediction['probability']:.3f}) @ ${current_price:.2f}"
@@ -330,11 +345,11 @@ class MLTrader:
         top5     = scored_candidates[:max_buys]
         logging.info(
             f"  Top {max_buys} of {len(scored_candidates)} scored: "
-            f"{[s for s, _, _ in top5]}"
+            f"{[s for s, _, _, _ in top5]}"
         )
 
         # Step 3: Act on top 5 only
-        for symbol, prediction, current_price in top5:
+        for symbol, prediction, current_price, df in top5:
             confidence = prediction['probability']
             should_buy = prediction['is_buy']
 
@@ -344,18 +359,31 @@ class MLTrader:
             )
 
             if should_buy and confidence >= min_confidence:
-                if dry_run:
-                    logging.info(f"[DRY RUN] Would BUY {symbol}")
+                atr = _calculate_atr(df)
+                if atr is None:
+                    # Fallback to 3% if ATR unavailable
+                    stop_loss = round(current_price * 0.97, 2)
+                    logging.warning(f"{symbol}: ATR unavailable — using 3% fallback stop")
                 else:
-                    order = self.execute_trade(symbol, 'BUY', confidence, current_price)
+                    stop_loss = round(current_price - ATR_MULTIPLIER * atr, 2)
+                    logging.info(f"{symbol}: ATR={atr:.2f}  stop=${stop_loss:.2f} ({ATR_MULTIPLIER}×ATR below entry)")
+                take_profit = round(current_price * (1 + TAKE_PROFIT_PCT), 2)
+
+                if dry_run:
+                    logging.info(f"[DRY RUN] Would BUY {symbol}  stop=${stop_loss:.2f}  tp=${take_profit:.2f}")
+                else:
+                    order = self.execute_trade(
+                        symbol, 'BUY', confidence, current_price,
+                        stop_loss=stop_loss, take_profit=take_profit,
+                    )
                     if order:
                         ind = _get_indicators(df)
                         _log_order(
                             symbol=symbol, side='BUY',
                             qty=int(getattr(order, 'qty', 0)),
                             entry_price=current_price,
-                            take_profit=round(current_price * 1.02, 2),
-                            stop_loss=round(current_price * 0.99, 2),
+                            take_profit=take_profit,
+                            stop_loss=stop_loss,
                             order_id=getattr(order, 'id', 'N/A'),
                             confidence=confidence,
                             rsi=ind['rsi'], momentum=ind['momentum'],
