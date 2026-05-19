@@ -230,6 +230,7 @@ Each run executes two passes:
 - Fetches momentum stocks from FinViz screener
 - Skips any ticker already held
 - Runs BUY detector; places order with ATR-based stop loss if signal fires above confidence threshold
+- Before placing each order, fetches the live ask price via `get_live_price()` (falls back to last trade price, then prior close) — the limit price and ATR stop are anchored to the current market, not yesterday's close
 - Take profit ceiling is disabled by default (`USE_TAKE_PROFIT = False` in `ml_trader.py`) — exits are via SELL signal or stop loss only; set to `True` to re-enable the 20% TP bracket
 
 ## Models

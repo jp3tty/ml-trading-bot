@@ -362,22 +362,36 @@ class MLTrader:
             )
 
             if should_buy and confidence >= min_confidence:
+                # Fetch live ask price so the limit order and ATR stop are anchored
+                # to the current market, not yesterday's close.
+                live_price = self.conn.get_live_price(symbol)
+                if live_price is None:
+                    logging.warning(
+                        f"{symbol}: live quote unavailable — using prior close ${current_price:.2f}"
+                    )
+                    live_price = current_price
+                else:
+                    logging.info(
+                        f"{symbol}: live ask=${live_price:.2f}  prior close=${current_price:.2f}"
+                    )
+
                 atr = _calculate_atr(df)
                 if atr is None:
-                    # Fallback to 3% if ATR unavailable
-                    stop_loss = round(current_price * 0.97, 2)
+                    stop_loss = round(live_price * 0.97, 2)
                     logging.warning(f"{symbol}: ATR unavailable — using 3% fallback stop")
                 else:
-                    stop_loss = round(current_price - ATR_MULTIPLIER * atr, 2)
-                    logging.info(f"{symbol}: ATR={atr:.2f}  stop=${stop_loss:.2f} ({ATR_MULTIPLIER}×ATR below entry)")
-                take_profit = round(current_price * (1 + TAKE_PROFIT_PCT), 2) if USE_TAKE_PROFIT else None
+                    stop_loss = round(live_price - ATR_MULTIPLIER * atr, 2)
+                    logging.info(
+                        f"{symbol}: ATR={atr:.2f}  stop=${stop_loss:.2f} ({ATR_MULTIPLIER}×ATR below live ask)"
+                    )
+                take_profit = round(live_price * (1 + TAKE_PROFIT_PCT), 2) if USE_TAKE_PROFIT else None
 
                 if dry_run:
                     tp_str = f"  tp=${take_profit:.2f}" if take_profit else ""
                     logging.info(f"[DRY RUN] Would BUY {symbol}  stop=${stop_loss:.2f}{tp_str}")
                 else:
                     order = self.execute_trade(
-                        symbol, 'BUY', confidence, current_price,
+                        symbol, 'BUY', confidence, live_price,
                         stop_loss=stop_loss, take_profit=take_profit,
                     )
                     if order:
@@ -385,7 +399,7 @@ class MLTrader:
                         _log_order(
                             symbol=symbol, side='BUY',
                             qty=int(getattr(order, 'qty', 0)),
-                            entry_price=current_price,
+                            entry_price=live_price,
                             take_profit=take_profit or 0,
                             stop_loss=stop_loss,
                             order_id=getattr(order, 'id', 'N/A'),
@@ -396,7 +410,7 @@ class MLTrader:
                             'symbol': symbol,
                             'signal': 'BUY',
                             'confidence': confidence,
-                            'price': current_price,
+                            'price': live_price,
                             'time': datetime.now(),
                         })
 

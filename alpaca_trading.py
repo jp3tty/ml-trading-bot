@@ -59,6 +59,26 @@ class AlpacaConnection:
 
         return bars
 
+    def get_live_price(self, symbol):
+        """Return the current ask price from the latest quote, falling back to last trade price."""
+        try:
+            quote = self.api.get_latest_quote(symbol, feed='iex')
+            for attr in ('ask_price', 'ap'):
+                val = getattr(quote, attr, None)
+                if val and float(val) > 0:
+                    return float(val)
+        except Exception:
+            pass
+        try:
+            trade = self.api.get_latest_trade(symbol, feed='iex')
+            for attr in ('price', 'p'):
+                val = getattr(trade, attr, None)
+                if val and float(val) > 0:
+                    return float(val)
+        except Exception:
+            pass
+        return None
+
     def place_bracket_order(self, symbol, qty, entry_price, stop_loss, take_profit=None):
         """Submit a buy order with stop-loss. Pass take_profit to add a TP ceiling."""
         kwargs = dict(

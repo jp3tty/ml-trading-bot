@@ -649,6 +649,7 @@ pip install scikit-learn xgboost pycatch22 pyarrow joblib pandas numpy
 - [x] Added runtime SELL confidence floor — `--sell-confidence 0.3` overrides the model's hairpin 0.040 threshold without retraining; SELL only fires when `probability ≥ 0.30` (2026-05-13)
 - [x] Replaced fixed 1% stop loss with ATR-based safety net — stop set at `entry − 2.0 × ATR(14)`, giving each position room proportional to its actual volatility; take profit widened to 20% ceiling so the ML sell model handles normal exits; falls back to 3% if ATR is unavailable (2026-05-14)
 - [x] Disabled take-profit ceiling exit — `USE_TAKE_PROFIT = False` in `ml_trader.py`; orders now use `oto` (stop-loss only) so all exits go via ML SELL signal or ATR stop; TP can be re-enabled by flipping the flag (2026-05-19)
+- [x] Fixed stale-price stop-loss trigger — BUY orders previously anchored limit price and ATR stop to prior day's close; bot now fetches live ask via `get_live_price()` (quote → last trade → close fallback) immediately before each order so the stop is correctly placed relative to the actual fill price (2026-05-19)
 - [ ] Monitor paper trade results and P&L via dashboard
 - [ ] Build backtesting framework
 
