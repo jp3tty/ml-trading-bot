@@ -30,7 +30,9 @@ _ta = TechnicalAnalysis()
 
 ATR_PERIOD     = 14
 ATR_MULTIPLIER = 2.0
-TAKE_PROFIT_PCT = 0.20  # wide ceiling — ML model handles normal exits
+
+USE_TAKE_PROFIT = False  # set True to re-enable TP ceiling exit
+TAKE_PROFIT_PCT = 0.20  # wide ceiling — only used when USE_TAKE_PROFIT is True
 
 
 def _calculate_atr(df, period=ATR_PERIOD):
@@ -198,12 +200,13 @@ class MLTrader:
                 symbol=symbol,
                 qty=qty,
                 entry_price=entry_price,
-                take_profit=take_profit,
                 stop_loss=stop_loss,
+                take_profit=take_profit,
             )
+            tp_str = f"  tp=${take_profit:.2f}" if take_profit else ""
             logging.info(
                 f"BUY order placed: {symbol} x{qty} @ ${current_price:.2f} | "
-                f"stop=${stop_loss:.2f}  tp=${take_profit:.2f}"
+                f"stop=${stop_loss:.2f}{tp_str}"
             )
             return order
 
@@ -367,10 +370,11 @@ class MLTrader:
                 else:
                     stop_loss = round(current_price - ATR_MULTIPLIER * atr, 2)
                     logging.info(f"{symbol}: ATR={atr:.2f}  stop=${stop_loss:.2f} ({ATR_MULTIPLIER}×ATR below entry)")
-                take_profit = round(current_price * (1 + TAKE_PROFIT_PCT), 2)
+                take_profit = round(current_price * (1 + TAKE_PROFIT_PCT), 2) if USE_TAKE_PROFIT else None
 
                 if dry_run:
-                    logging.info(f"[DRY RUN] Would BUY {symbol}  stop=${stop_loss:.2f}  tp=${take_profit:.2f}")
+                    tp_str = f"  tp=${take_profit:.2f}" if take_profit else ""
+                    logging.info(f"[DRY RUN] Would BUY {symbol}  stop=${stop_loss:.2f}{tp_str}")
                 else:
                     order = self.execute_trade(
                         symbol, 'BUY', confidence, current_price,
@@ -382,7 +386,7 @@ class MLTrader:
                             symbol=symbol, side='BUY',
                             qty=int(getattr(order, 'qty', 0)),
                             entry_price=current_price,
-                            take_profit=take_profit,
+                            take_profit=take_profit or 0,
                             stop_loss=stop_loss,
                             order_id=getattr(order, 'id', 'N/A'),
                             confidence=confidence,

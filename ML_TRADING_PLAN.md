@@ -648,6 +648,7 @@ pip install scikit-learn xgboost pycatch22 pyarrow joblib pandas numpy
 - [x] Dashboard deployed to Streamlit Community Cloud — live and accessible (2026-05-11)
 - [x] Added runtime SELL confidence floor — `--sell-confidence 0.3` overrides the model's hairpin 0.040 threshold without retraining; SELL only fires when `probability ≥ 0.30` (2026-05-13)
 - [x] Replaced fixed 1% stop loss with ATR-based safety net — stop set at `entry − 2.0 × ATR(14)`, giving each position room proportional to its actual volatility; take profit widened to 20% ceiling so the ML sell model handles normal exits; falls back to 3% if ATR is unavailable (2026-05-14)
+- [x] Disabled take-profit ceiling exit — `USE_TAKE_PROFIT = False` in `ml_trader.py`; orders now use `oto` (stop-loss only) so all exits go via ML SELL signal or ATR stop; TP can be re-enabled by flipping the flag (2026-05-19)
 - [ ] Monitor paper trade results and P&L via dashboard
 - [ ] Build backtesting framework
 
@@ -875,11 +876,12 @@ df['rel_strength'] = df['close'].pct_change(20) - spy_df['close'].pct_change(20)
 
 ## Next Steps
 
-### Immediate — Monitor Paper Trading Results (2026-05-13)
+### Immediate — Monitor Paper Trading Results (2026-05-19)
 Dashboard is live on Streamlit Community Cloud. Auto-updates after every trading run via CI.
 - System has been placing live paper orders since 2026-05-12
 - SELL confidence floor set to 0.30 (runtime override) to reduce hairpin exits from the model's raw 0.040 threshold
-- Track P&L, exit types (TP/SL/SELL Signal), and indicator context per trade as data accumulates
+- Take-profit ceiling disabled (`USE_TAKE_PROFIT = False`) — exits are SELL signal or ATR stop only; goal is to validate ML BUY/SELL in isolation
+- Track P&L, exit types (SL/SELL Signal), and indicator context per trade as data accumulates
 
 ### Short-term — Phase 6 Completion
 1. Monitor paper trade results and P&L via the Streamlit dashboard

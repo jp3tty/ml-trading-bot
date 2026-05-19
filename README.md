@@ -55,7 +55,7 @@ This produces meaningfully balanced labels and filters for setups with an explic
                │   Pass 2: BUY watchlist tickers │
                └────────────────┬────────────────┘
                                 │
-                       Alpaca bracket orders
+                       Alpaca orders (stop-loss only by default)
 ```
 
 ## Project Structure
@@ -229,7 +229,8 @@ Each run executes two passes:
 **Pass 2 — BUY** (FinViz watchlist):
 - Fetches momentum stocks from FinViz screener
 - Skips any ticker already held
-- Runs BUY detector; places bracket order if signal fires above confidence threshold
+- Runs BUY detector; places order with ATR-based stop loss if signal fires above confidence threshold
+- Take profit ceiling is disabled by default (`USE_TAKE_PROFIT = False` in `ml_trader.py`) — exits are via SELL signal or stop loss only; set to `True` to re-enable the 20% TP bracket
 
 ## Models
 
@@ -301,7 +302,7 @@ A Streamlit dashboard at `dashboard/app.py` provides live visibility into paper 
 |---------|---------|
 | Account Summary | Portfolio value, buying power, day P&L |
 | Active Positions | Open positions with entry price, current price, unrealized P&L, RSI and momentum at entry |
-| Trade History | Entry/exit date, entry/exit price, P&L, exit type (Take Profit / Stop Loss / SELL Signal), entry indicators |
+| Trade History | Entry/exit date, entry/exit price, P&L, exit type (Stop Loss / SELL Signal / Take Profit if enabled), entry indicators |
 | Signal Log | Full history of all tickers scored per run |
 
 After each run, the GitHub Actions workflow automatically commits updated `orders.csv` and `signals.csv` back to the repo so the dashboard always reflects the latest data.

@@ -59,16 +59,20 @@ class AlpacaConnection:
 
         return bars
 
-    def place_bracket_order(self, symbol, qty, entry_price, take_profit, stop_loss):
-        """Submit a buy bracket order (limit entry + take-profit + stop-loss)."""
-        return self.api.submit_order(
+    def place_bracket_order(self, symbol, qty, entry_price, stop_loss, take_profit=None):
+        """Submit a buy order with stop-loss. Pass take_profit to add a TP ceiling."""
+        kwargs = dict(
             symbol=symbol,
             qty=qty,
             side="buy",
             type="limit",
             limit_price=entry_price,
             time_in_force="day",
-            order_class="bracket",
-            take_profit={"limit_price": take_profit},
             stop_loss={"stop_price": stop_loss},
         )
+        if take_profit:
+            kwargs["order_class"] = "bracket"
+            kwargs["take_profit"] = {"limit_price": take_profit}
+        else:
+            kwargs["order_class"] = "oto"
+        return self.api.submit_order(**kwargs)
