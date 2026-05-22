@@ -1,4 +1,4 @@
-timestamp,symbol,side,qty,entry_price,take_profit,stop_loss,order_id,confidence
+timestamp,symbol,side,qty,entry_price,take_profit,stop_loss,order_id,confidence,rsi,momentum
 2026-05-12T16:50:14.313250,ELLO,BUY,41,23.99,24.47,23.75,2b2befec-bbda-4a7d-9829-203d6e71be6d,0.5427
 2026-05-12T16:50:14.344434,HALO,BUY,13,72.86,74.32,72.13,f86c4156-17e3-4ba8-b8db-1548b2d74252,0.4764
 2026-05-12T16:50:14.386704,HLIO,BUY,13,75.07,76.57,74.32,b1e07bf2-8238-4c95-9d9a-f4718f08929d,0.4688
