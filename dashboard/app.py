@@ -153,7 +153,6 @@ if not filled.empty:
                 ind['confidence']  = round(float(last.get('confidence') or 0), 3)
                 ind['rsi']         = round(float(last['rsi']), 1) if 'rsi' in last.index and pd.notna(last['rsi']) else '—'
                 ind['momentum %']  = round(float(last['momentum']), 4) if 'momentum' in last.index and pd.notna(last['momentum']) else '—'
-                ind['take_profit'] = float(last.get('take_profit') or 0)
                 ind['stop_loss']   = float(last.get('stop_loss') or 0)
 
         after = sells[
@@ -167,9 +166,8 @@ if not filled.empty:
             pl_pct     = (exit_price - entry_price) / entry_price * 100
             pl_abs     = (exit_price - entry_price) * buy['qty']
 
-            tp = ind.get('take_profit', 0)
             sl = ind.get('stop_loss', 0)
-            if tp and abs(exit_price - tp) / tp < 0.01:
+            if sell.get('order_type') == 'oco':
                 exit_via = '✅ Take Profit'
             elif sl and abs(exit_price - sl) / sl < 0.01:
                 exit_via = '🛑 Stop Loss'
