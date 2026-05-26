@@ -19,6 +19,7 @@ import argparse
 import csv
 import logging
 import os
+from collections import defaultdict
 from datetime import datetime
 from pathlib import Path
 
@@ -45,7 +46,7 @@ SIGNAL_FIELDS = [
 ]
 ORDER_FIELDS = [
     'timestamp', 'symbol', 'side', 'qty', 'entry_price',
-    'take_profit', 'stop_loss', 'order_id', 'confidence'
+    'take_profit', 'stop_loss', 'order_id', 'confidence', 'rsi', 'momentum',
 ]
 
 
@@ -77,20 +78,123 @@ def log_signal(symbol, side, prediction, action_taken, price):
         csv.DictWriter(f, fieldnames=SIGNAL_FIELDS).writerow(row)
 
 
-def log_order(symbol, side, qty, entry_price, take_profit, stop_loss, order, confidence):
+def log_order(symbol, side, qty, entry_price, take_profit, stop_loss, order, confidence,
+              rsi=None, momentum=None):
     row = {
         'timestamp':   datetime.now().isoformat(),
         'symbol':      symbol,
         'side':        side,
         'qty':         qty,
         'entry_price': entry_price,
-        'take_profit': take_profit,
-        'stop_loss':   stop_loss,
-        'order_id':    getattr(order, 'id', 'N/A'),
-        'confidence':  round(confidence, 4),
+        'take_profit': take_profit if take_profit is not None else '',
+        'stop_loss':   stop_loss if stop_loss is not None else '',
+        'order_id':    getattr(order, 'id', 'N/A') if order is not None else 'N/A',
+        'confidence':  round(confidence, 4) if confidence is not None else '',
+        'rsi':         rsi if rsi is not None else '',
+        'momentum':    momentum if momentum is not None else '',
     }
     with open(ORDER_LOG, 'a', newline='') as f:
         csv.DictWriter(f, fieldnames=ORDER_FIELDS).writerow(row)
+
+
+def sync_bracket_exits(conn, alpaca_held_symbols):
+    """Detect and log positions closed by bracket SL/TP since the last run.
+
+    Compares open positions in orders.csv against Alpaca's live positions.
+    Any symbol open in the log but absent from Alpaca was closed by a bracket
+    order — we fetch the actual fill price from Alpaca order history and write
+    a BRACKET_EXIT sell row so the log stays accurate.
+    """
+    if not os.path.exists(ORDER_LOG) or os.path.getsize(ORDER_LOG) == 0:
+        return
+
+    with open(ORDER_LOG, newline='') as f:
+        rows = list(csv.DictReader(f))
+
+    # Net open qty per symbol from our log
+    net_qty = defaultdict(int)
+    for r in rows:
+        try:
+            qty = int(r.get('qty', 0) or 0)
+        except ValueError:
+            continue
+        if r['side'] == 'BUY':
+            net_qty[r['symbol']] += qty
+        elif r['side'] == 'SELL':
+            net_qty[r['symbol']] -= qty
+
+    log_open = {sym for sym, qty in net_qty.items() if qty > 0}
+    bracket_closed = log_open - alpaca_held_symbols
+
+    if not bracket_closed:
+        logging.info("sync_bracket_exits: log is in sync with Alpaca — no unrecorded exits")
+        return
+
+    logging.info(
+        f"sync_bracket_exits: {len(bracket_closed)} bracket-closed position(s) detected: "
+        f"{sorted(bracket_closed)}"
+    )
+
+    # Fetch closed orders from Alpaca once; filter per symbol client-side
+    try:
+        earliest = rows[0]['timestamp'][:10] if rows else None
+        closed_orders = conn.api.list_orders(
+            status='closed',
+            limit=500,
+            direction='desc',
+            after=earliest,
+        )
+    except Exception as e:
+        logging.error(f"sync_bracket_exits: could not fetch order history: {e}")
+        return
+
+    # Index sell fills by symbol (most recent first, direction='desc' guarantees this)
+    sell_fills = defaultdict(list)
+    for o in closed_orders:
+        if (
+            o.side == 'sell'
+            and o.filled_avg_price
+            and float(getattr(o, 'filled_qty', 0) or 0) > 0
+        ):
+            sell_fills[o.symbol].append(o)
+
+    logged = 0
+    for symbol in sorted(bracket_closed):
+        if symbol not in sell_fills:
+            logging.warning(
+                f"{symbol}: bracket exit detected but no sell fill found in Alpaca "
+                f"order history — skipping (check the Alpaca dashboard manually)"
+            )
+            continue
+
+        fill = sell_fills[symbol][0]  # most recent sell fill
+        exit_price = round(float(fill.filled_avg_price), 4)
+        exit_qty   = int(float(fill.filled_qty))
+
+        row = {
+            'timestamp':   datetime.now().isoformat(),
+            'symbol':      symbol,
+            'side':        'SELL',
+            'qty':         exit_qty,
+            'entry_price': exit_price,
+            'take_profit': '',
+            'stop_loss':   '',
+            'order_id':    fill.id,
+            'confidence':  '',
+            'rsi':         '',
+            'momentum':    '',
+        }
+        with open(ORDER_LOG, 'a', newline='') as f:
+            csv.DictWriter(f, fieldnames=ORDER_FIELDS).writerow(row)
+
+        logging.info(
+            f"{symbol}: logged BRACKET_EXIT — qty={exit_qty} @ ${exit_price:.2f}  "
+            f"order_id={fill.id}"
+        )
+        logged += 1
+
+    if logged:
+        logging.info(f"sync_bracket_exits: logged {logged} bracket exit(s)")
 
 
 def print_model_info(buy_predictor, sell_predictor=None):
@@ -218,7 +322,28 @@ def run_scan(symbols=None, min_confidence=0.6, min_sell_confidence=0.3, dry_run=
 
     # Fetch held positions once — drives the SELL pass
     held = trader.get_held_positions()
+
+    # Sync any bracket SL/TP exits that fired since the last run
+    sync_bracket_exits(conn, set(held.keys()))
+
     print_open_positions(conn)
+
+    # Guard against same-day duplicate buys: if this symbol was already
+    # purchased earlier today it may not yet appear in list_positions() due
+    # to Alpaca paper-trading settlement lag, so exclude it from the BUY pass.
+    today = datetime.now().strftime('%Y-%m-%d')
+    today_buys = set()
+    if os.path.exists(ORDER_LOG):
+        with open(ORDER_LOG, newline='') as f:
+            for row in csv.DictReader(f):
+                if row.get('side') == 'BUY' and row['timestamp'].startswith(today):
+                    today_buys.add(row['symbol'])
+    unsettled = today_buys - set(held.keys())
+    if unsettled:
+        logging.info(
+            f"Same-day buy guard: {sorted(unsettled)} already purchased today "
+            f"but not yet reflected in Alpaca positions — will be excluded from BUY pass"
+        )
 
     session_signals = []
     session_orders  = []
@@ -295,11 +420,12 @@ def run_scan(symbols=None, min_confidence=0.6, min_sell_confidence=0.3, dry_run=
     if symbols is None:
         symbols = trader.get_watchlist()
 
-    buy_candidates  = [s for s in symbols if s not in held]
+    buy_candidates  = [s for s in symbols if s not in held and s not in today_buys]
+    skipped         = len(symbols) - len(buy_candidates)
     open_slots      = max(0, MAX_POSITIONS - len(held))
     logging.info(
         f"--- BUY pass: {len(buy_candidates)} candidates "
-        f"({len(symbols) - len(buy_candidates)} skipped — already held) | "
+        f"({skipped} skipped — {len(held)} held, {len(unsettled)} same-day guard) | "
         f"position slots available: {open_slots}/{MAX_POSITIONS} ---"
     )
 
