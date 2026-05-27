@@ -6,7 +6,7 @@ import sys
 from datetime import datetime
 
 import pandas as pd
-from alpaca_trade_api.rest import TimeFrame
+from alpaca_trade_api.rest import TimeFrame, TimeFrameUnit
 
 from alpaca_trading import AlpacaConnection
 from ml.binary_predictor import BinaryBuyPredictor
@@ -129,18 +129,19 @@ class MLTrader:
             logging.error(f"Error fetching held positions: {e}")
             return {}
 
-    def fetch_recent_data(self, symbol, lookback_days=150):
-        """Fetch enough history for feature calculation.
+    def fetch_recent_data(self, symbol, lookback_days=60):
+        """Fetch 4-hour bars to match the timeframe the models were trained on.
 
-        The binary feature builder requires window_size + horizon + 50 bars minimum.
-        With window_size=40 and horizon=9, that's 99 trading days (~140 calendar days).
-        Default of 150 calendar days provides a comfortable buffer.
+        Training used saved_data/historical_4h (TimeFrame 4h). Live inference
+        must use the same timeframe or the features are meaningless.
+        60 calendar days → ~300 four-hour bars, well above the 80-bar minimum
+        (window_size=21 + horizon=9 + 50 buffer).
         """
         try:
             df = self.conn.get_historical_data(
                 symbol,
                 days=lookback_days,
-                timeframe=TimeFrame.Day
+                timeframe=TimeFrame(4, TimeFrameUnit.Hour),
             )
             return df
         except Exception as e:

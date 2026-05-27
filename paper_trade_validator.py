@@ -28,7 +28,7 @@ import pandas as pd
 from alpaca_trading import AlpacaConnection
 from ml.binary_predictor import BinaryBuyPredictor
 from ml.binary_sell_predictor import BinarySellPredictor
-from ml_trader import MLTrader
+from ml_trader import MLTrader, _calculate_atr
 
 logging.basicConfig(
     level=logging.INFO,
@@ -111,6 +111,12 @@ def sync_bracket_exits(conn, alpaca_held_symbols):
     with open(ORDER_LOG, newline='') as f:
         rows = list(csv.DictReader(f))
 
+    # Order IDs already recorded — never log the same Alpaca order twice
+    existing_order_ids = {
+        r['order_id'] for r in rows
+        if r.get('order_id') and r['order_id'] not in ('N/A', '')
+    }
+
     # Net open qty per symbol from our log
     net_qty = defaultdict(int)
     for r in rows:
@@ -148,13 +154,14 @@ def sync_bracket_exits(conn, alpaca_held_symbols):
         logging.error(f"sync_bracket_exits: could not fetch order history: {e}")
         return
 
-    # Index sell fills by symbol (most recent first, direction='desc' guarantees this)
+    # Index all sell fills by symbol, excluding already-logged order IDs
     sell_fills = defaultdict(list)
     for o in closed_orders:
         if (
             o.side == 'sell'
             and o.filled_avg_price
             and float(getattr(o, 'filled_qty', 0) or 0) > 0
+            and o.id not in existing_order_ids
         ):
             sell_fills[o.symbol].append(o)
 
@@ -162,36 +169,38 @@ def sync_bracket_exits(conn, alpaca_held_symbols):
     for symbol in sorted(bracket_closed):
         if symbol not in sell_fills:
             logging.warning(
-                f"{symbol}: bracket exit detected but no sell fill found in Alpaca "
-                f"order history — skipping (check the Alpaca dashboard manually)"
+                f"{symbol}: bracket exit detected but no new sell fill found in Alpaca "
+                f"order history — skipping (may already be logged or check the Alpaca dashboard)"
             )
             continue
 
-        fill = sell_fills[symbol][0]  # most recent sell fill
-        exit_price = round(float(fill.filled_avg_price), 4)
-        exit_qty   = int(float(fill.filled_qty))
+        # Log all unrecorded sell fills for this symbol (handles multiple buys/bracket orders)
+        for fill in sell_fills[symbol]:
+            exit_price = round(float(fill.filled_avg_price), 4)
+            exit_qty   = int(float(fill.filled_qty))
 
-        row = {
-            'timestamp':   datetime.now().isoformat(),
-            'symbol':      symbol,
-            'side':        'SELL',
-            'qty':         exit_qty,
-            'entry_price': exit_price,
-            'take_profit': '',
-            'stop_loss':   '',
-            'order_id':    fill.id,
-            'confidence':  '',
-            'rsi':         '',
-            'momentum':    '',
-        }
-        with open(ORDER_LOG, 'a', newline='') as f:
-            csv.DictWriter(f, fieldnames=ORDER_FIELDS).writerow(row)
+            row = {
+                'timestamp':   datetime.now().isoformat(),
+                'symbol':      symbol,
+                'side':        'SELL',
+                'qty':         exit_qty,
+                'entry_price': exit_price,
+                'take_profit': '',
+                'stop_loss':   '',
+                'order_id':    fill.id,
+                'confidence':  '',
+                'rsi':         '',
+                'momentum':    '',
+            }
+            with open(ORDER_LOG, 'a', newline='') as f:
+                csv.DictWriter(f, fieldnames=ORDER_FIELDS).writerow(row)
 
-        logging.info(
-            f"{symbol}: logged BRACKET_EXIT — qty={exit_qty} @ ${exit_price:.2f}  "
-            f"order_id={fill.id}"
-        )
-        logged += 1
+            existing_order_ids.add(fill.id)
+            logging.info(
+                f"{symbol}: logged BRACKET_EXIT — qty={exit_qty} @ ${exit_price:.2f}  "
+                f"order_id={fill.id}"
+            )
+            logged += 1
 
     if logged:
         logging.info(f"sync_bracket_exits: logged {logged} bracket exit(s)")
@@ -481,21 +490,26 @@ def run_scan(symbols=None, min_confidence=0.6, min_sell_confidence=0.3, dry_run=
                     f"@ ${current_price:.2f}"
                 )
             else:
-                qty         = trader.calculate_position_size(symbol, current_price)
-                take_profit = round(current_price * 1.02, 2)
-                stop_loss   = round(current_price * 0.99, 2)
+                live_price = conn.get_live_price(symbol) or current_price
+                qty        = trader.calculate_position_size(symbol, live_price)
 
-                entry_price = round(current_price, 2)
+                atr = _calculate_atr(df)
+                if atr is not None:
+                    stop_loss = round(live_price - 2.0 * atr, 2)
+                else:
+                    stop_loss = round(live_price * 0.97, 2)  # 3% fallback
+
+                entry_price = round(live_price, 2)
                 order = conn.place_bracket_order(
                     symbol=symbol,
                     qty=qty,
                     entry_price=entry_price,
-                    take_profit=take_profit,
+                    take_profit=None,   # exits via ML SELL or ATR stop only
                     stop_loss=stop_loss,
                 )
                 action = 'BUY_ORDER'
                 log_order(symbol, 'BUY', qty, entry_price,
-                          take_profit, stop_loss, order,
+                          None, stop_loss, order,
                           prediction['probability'])
                 session_orders.append(('BUY', symbol))
                 logging.info(

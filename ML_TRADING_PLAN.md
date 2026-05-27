@@ -377,16 +377,16 @@ champion = search.run_search(quick=True)
 
 ### Champion Selection Criteria
 
-Champions are selected by **highest F1 score** subject to both precision and recall floors. The decision threshold is chosen by `find_optimal_threshold()`, which maximizes F1 over the PR curve while satisfying both constraints simultaneously:
+Champions are selected by **highest recall** subject to a minimum precision floor (0.35–0.40). The decision threshold is chosen by `find_optimal_threshold()`, which picks the lowest threshold that still meets the precision floor, directly maximizing recall:
 
 ```python
-# Both floors enforced during threshold selection:
-valid_idx = (precisions >= min_precision) & (recalls >= min_recall)
-# Falls back to precision-only if no threshold meets both
-# Champion requires: precision >= min_precision AND recall >= min_recall
+# Precision floor enforced during threshold selection:
+valid_idx = precisions >= min_precision
+# Lowest valid threshold chosen → maximizes recall
+# Champion requires: precision >= min_precision, ranked by recall
 ```
 
-Search space for the floors: `min_precision ∈ [0.48, 0.52]`, `min_recall ∈ [0.05, 0.10]`.
+Search space for the floor: `min_precision ∈ [0.35, 0.40]`. (`min_recall` was removed from the search space — the optimizer maximizes recall directly.)
 
 ---
 
@@ -600,7 +600,7 @@ pip install scikit-learn xgboost pycatch22 pyarrow joblib pandas numpy
 - [x] Implement catch22 mode (time series features)
 - [x] Implement combined mode
 
-### Phase 3: BUY Detector Training 🔄
+### Phase 3: BUY Detector Training ✅
 - [x] Create `ml/binary_search.py` (hyperparameter grid search)
 - [x] Implement precision/recall optimization
 - [x] Champion selection by F1 with precision/recall floors
@@ -650,6 +650,11 @@ pip install scikit-learn xgboost pycatch22 pyarrow joblib pandas numpy
 - [x] Replaced fixed 1% stop loss with ATR-based safety net — stop set at `entry − 2.0 × ATR(14)`, giving each position room proportional to its actual volatility; take profit widened to 20% ceiling so the ML sell model handles normal exits; falls back to 3% if ATR is unavailable (2026-05-14)
 - [x] Disabled take-profit ceiling exit — `USE_TAKE_PROFIT = False` in `ml_trader.py`; orders now use `oto` (stop-loss only) so all exits go via ML SELL signal or ATR stop; TP can be re-enabled by flipping the flag (2026-05-19)
 - [x] Fixed stale-price stop-loss trigger — BUY orders previously anchored limit price and ATR stop to prior day's close; bot now fetches live ask via `get_live_price()` (quote → last trade → close fallback) immediately before each order so the stop is correctly placed relative to the actual fill price (2026-05-19)
+- [x] Fixed duplicate buys and unlogged bracket exits — deduplication guard added so the same ticker isn't bought twice in a single run; bracket exit orders are now logged correctly to `orders.csv` (2026-05-26)
+- [x] Fixed sync_bracket_exits() re-logging same exits every run — now checks existing order IDs in orders.csv before writing; also logs all unrecorded fills per symbol (not just the most recent), handling cases where a symbol had multiple buys with separate bracket orders (2026-05-27)
+- [x] Fixed timeframe mismatch — live inference was fetching daily bars (TimeFrame.Day) but the models were trained on 4-hour bars; changed fetch_recent_data() to TimeFrame(4h), lookback reduced to 60 days (~300 4h bars, well above minimum) (2026-05-27)
+- [x] Fixed paper_trade_validator.py bracket order parameters — was using hardcoded 1% SL / 2% TP; now uses ATR-based stop (2×ATR, 3% fallback) and TP disabled, matching ml_trader.py intent (2026-05-27)
+- [x] Cleaned orders.csv — removed 24 duplicate SELL rows created by the old sync function (2026-05-27)
 - [ ] Monitor paper trade results and P&L via dashboard
 - [ ] Build backtesting framework
 
@@ -687,8 +692,9 @@ For early-exit trading strategy:
 | 60% | 20% | Many | ✅ Sweet spot |
 | 55% | 35% | Very many | ✅ Good if fees are low |
 | 50% | 50% | Too many | ❌ Break-even before fees |
+| **37%** | **100%** | **Very many** | **⚠️ Current — SELL detector limits downside** |
 
-**Target: 55-60% precision with 20-40% recall**
+**Current approach (2026-05-06):** Maximize recall subject to a 35–40% precision floor. The SELL detector's fast exits bound losses from bad BUY entries, making high recall viable even at 37% precision.
 
 ---
 
