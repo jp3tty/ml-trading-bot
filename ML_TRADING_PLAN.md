@@ -615,6 +615,7 @@ pip install scikit-learn xgboost pycatch22 pyarrow joblib pandas numpy
   - `min_recall` removed from search space (redundant — optimizer directly maximizes it)
   - Precision floor lowered from 0.48 → 0.35–0.40 (enough to avoid commission drag)
 - [x] Run search with recall-optimized objective — champion: Random Forest, window=21, horizon=9, take_profit=0.8%, stop_loss=0.5%, threshold=0.005, precision=37.1%, recall=100%, F1=0.541
+- [ ] **Re-run search** — a timeframe mismatch bug (daily bars in live inference vs 4h training) was fixed 2026-05-27; this champion was never validated against correct inference. Quick search space updated to expand horizon=[6,9,12]. Run: `poetry run python ml/binary_search.py --quick --max-files 200`
 
 ### Phase 4: BUY Detector Integration ✅
 - [x] Create `ml/binary_predictor.py`
@@ -630,6 +631,7 @@ pip install scikit-learn xgboost pycatch22 pyarrow joblib pandas numpy
 - [x] Train SELL detector — champion: XGBoost, window=20, horizon=5, sell_thresh=0.5%, precision=40.1%, recall=100%, F1=0.573
 - [x] Create `ml/binary_sell_predictor.py`
 - [x] Integrate with ml_trader.py
+- [ ] **Re-run SELL search** — same timeframe mismatch applied; re-train after new BUY champion is confirmed
 
 ### Phase 6: Full Integration ✅ / 🔄 Active
 - [x] Combine BUY and SELL detectors in ml_trader.py
@@ -872,36 +874,44 @@ df['rel_strength'] = df['close'].pct_change(20) - spy_df['close'].pct_change(20)
 
 ### Improvement Priority Order
 
-1. ~~**Use all data files**~~ — Done (no file limit in current search)
+1. ~~**Use all data files**~~ — `--max-files 200` is the recommended balance (~3 hrs); full 872 files for final validation
 2. ~~**Lower `buy_threshold`**~~ — Superseded by triple-barrier labeling
-3. ~~**Adjust `min_precision`**~~ — Done (0.48–0.52 with dual recall constraint)
+3. ~~**Adjust `min_precision`**~~ — Done (0.35–0.40 recall-first approach)
 4. ~~**Triple-barrier labeling**~~ — Done; replaces fixed-horizon approach
-5. **Add MACD and Bollinger Bands** — Proven short-term indicators (next after triple-barrier search validates)
-6. **Ensemble models** — Combine multiple approaches
+5. **Retrain BUY + SELL models** — timeframe mismatch bug fixed; new search pending (quick search: `--quick --max-files 200`)
+6. **Add MACD and Bollinger Bands** — after retraining validates the corrected inference
+7. **Ensemble models** — combine multiple approaches
 
 ---
 
 ## Next Steps
 
-### Immediate — Monitor Paper Trading Results (2026-05-19)
-Dashboard is live on Streamlit Community Cloud. Auto-updates after every trading run via CI.
-- System has been placing live paper orders since 2026-05-12
-- SELL confidence floor set to 0.30 (runtime override) to reduce hairpin exits from the model's raw 0.040 threshold
-- Take-profit ceiling disabled (`USE_TAKE_PROFIT = False`) — exits are SELL signal or ATR stop only; goal is to validate ML BUY/SELL in isolation
-- Track P&L, exit types (SL/SELL Signal), and indicator context per trade as data accumulates
+### Immediate — Retrain Models (2026-05-27)
+Three bugs were discovered and fixed that invalidate the current champions as live performance benchmarks:
+1. **Timeframe mismatch** — live inference was fetching daily bars; models trained on 4h. Fixed in `fetch_recent_data()`.
+2. **Wrong bracket order parameters** — `paper_trade_validator.py` used hardcoded 1% SL / 2% TP instead of ATR-based. Fixed.
+3. **Duplicate sync logging** — `sync_bracket_exits()` re-logged same exits every run. Fixed.
+
+Net P&L as of 2026-05-27 (50 closed trades): **-$190** — bracket stop exits (-$297) offset by ML SELL exits (+$107). Losses driven primarily by the bugs above.
+
+Retrain order:
+1. Run BUY search: `poetry run python ml/binary_search.py --quick --max-files 200` (~3 hrs)
+2. Validate new BUY champion; replace `.pkl` if improved
+3. Run SELL search: `poetry run python ml/binary_sell_search.py --quick --max-files 60` (~15 min)
+4. Resume paper trading with corrected models and monitor P&L
 
 ### Short-term — Phase 6 Completion
-1. Monitor paper trade results and P&L via the Streamlit dashboard
-2. Paper trade the full system for several weeks to validate end-to-end behavior
+1. Paper trade with corrected models for several weeks to validate end-to-end behavior
+2. Track P&L, exit types (ATR stop vs SELL Signal), and indicator context per trade
 3. Build a simple backtesting framework against existing parquet files
-4. Assess whether precision=37.1% is sufficient given the SELL detector's fast exits
+4. Assess live precision vs training precision to detect overfitting
 
 ### Medium-term — Phase 7 Refinement
-1. Consider replacing SELL ML model with trailing stop + fixed take-profit (simpler, faster, exits don't need to be predicted)
-2. Add market context features (SPY trend, VIX level, sector ETF performance)
-3. Implement walk-forward validation to check for overfitting over time
-4. Ensemble multiple BUY champion models
-5. Add MACD and Bollinger Bands to the feature set
+1. Add market context features (SPY trend, VIX level, sector ETF performance)
+2. Implement walk-forward validation to check for overfitting over time
+3. Ensemble multiple BUY champion models
+4. Add MACD and Bollinger Bands to the feature set
+5. Consider replacing SELL ML model with trailing stop (simpler, no retraining needed)
 
 ### Long-term — Production
 1. Paper trade for 1+ months with consistent positive P&L before going live

@@ -67,13 +67,14 @@ class BinaryHyperparameterSearch:
         }
 
     def define_quick_search_space(self):
-        """Focused search space (~40 combos, ~4 hrs with combined features).
-        Anchored around the previous champion region (window=30, horizon=9, xgboost).
+        """Focused search space (~240 combos, ~3 hrs with 200 files).
+        Expands horizon to [6, 9, 12] since the previous champion was found
+        with daily-bar inference (timeframe mismatch now fixed — re-search needed).
         Optimizes for recall — SELL detector manages risk on bad entries.
         """
         return {
             'window_size':   [21, 30],
-            'horizon':       [9],
+            'horizon':       [6, 9, 12],
             'take_profit':   [0.008, 0.010, 0.015],
             'stop_loss':     [0.005, 0.008],
             'classifier':    ['random_forest', 'xgboost'],

@@ -141,10 +141,13 @@ poetry run python data_collection/historical_collector_4h.py
 ### 2. Train the BUY Detector
 
 ```bash
-# Quick search (~30 min)
+# Quick search — recommended starting point (~3 hrs, representative sample)
+poetry run python ml/binary_search.py --quick --max-files 200
+
+# Quick search on all data (~6-8 hrs, use to validate champion)
 poetry run python ml/binary_search.py --quick
 
-# Full grid search (~2-4 hours)
+# Full grid search (~30-40 hrs)
 poetry run python ml/binary_search.py
 ```
 
@@ -237,11 +240,13 @@ Each run executes two passes:
 
 ### BUY Detector (Current Champion)
 
+> **Note:** This champion was trained correctly on 4h bars but deployed against daily-bar inference due to a bug (fixed 2026-05-27). A new search with corrected live inference is pending — treat these metrics as pre-fix baselines, not validated live performance.
+
 | Parameter | Value |
 |-----------|-------|
 | Classifier | Random Forest |
-| Window size | 21 bars |
-| Horizon | 9 bars |
+| Window size | 21 bars (4h) |
+| Horizon | 9 bars (4h) |
 | Take profit | 0.8% |
 | Stop loss | 0.5% |
 | Decision threshold | 0.005 |
@@ -253,11 +258,13 @@ Each run executes two passes:
 
 ### SELL Detector (Current Champion)
 
+> **Note:** Same timeframe mismatch applied — new search pending after BUY retrain.
+
 | Parameter | Value |
 |-----------|-------|
 | Classifier | XGBoost |
-| Window size | 20 bars |
-| Horizon | 5 bars |
+| Window size | 20 bars (4h) |
+| Horizon | 5 bars (4h) |
 | Sell threshold | 0.5% |
 | Decision threshold | 0.040 |
 | Runtime confidence floor | **0.30** |
@@ -345,7 +352,7 @@ Default filters (configurable in `stock_picker/stock_screener.py`):
 | 6a | Streamlit monitoring dashboard | ✅ Complete |
 | 7 | Refinement (ensemble, market context, walk-forward) | ⏳ Planned |
 
-**Active work:** Full BUY + SELL system running on paper trading via GitHub Actions (9:30 AM and 1:30 PM ET, Mon–Fri). Streamlit dashboard live on Streamlit Community Cloud — monitoring trade results and P&L as paper trading data accumulates.
+**Active work:** Full BUY + SELL system running on paper trading via GitHub Actions (9:30 AM and 1:30 PM ET, Mon–Fri). Streamlit dashboard live on Streamlit Community Cloud. Three bugs fixed 2026-05-27 (timeframe mismatch, wrong bracket order parameters, duplicate sync logging). New model search pending to produce champions validated against correct 4h inference.
 
 ## Development Roadmap
 
