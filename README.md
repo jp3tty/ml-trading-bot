@@ -28,6 +28,8 @@ This produces meaningfully balanced labels and filters for setups with an explic
 
 ## Architecture
 
+> For a full presentation-ready breakdown of the system design, see [ARCHITECTURE.md](ARCHITECTURE.md).
+
 ```
 ┌─────────────────────────────────────────────────────────────────────┐
 │                         DATA COLLECTION                             │
