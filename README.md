@@ -242,25 +242,22 @@ Each run executes two passes:
 
 ### BUY Detector (Current Champion)
 
-> **Note:** This champion was trained correctly on 4h bars but deployed against daily-bar inference due to a bug (fixed 2026-05-27). A new search with corrected live inference is pending — treat these metrics as pre-fix baselines, not validated live performance.
-
 | Parameter | Value |
 |-----------|-------|
 | Classifier | Random Forest |
 | Window size | 21 bars (4h) |
-| Horizon | 9 bars (4h) |
+| Horizon | 6 bars (4h) |
 | Take profit | 0.8% |
 | Stop loss | 0.5% |
-| Decision threshold | 0.005 |
-| Precision | 37.1% |
+| Decision threshold | 0.009 |
+| Precision | 39.2% |
 | Recall | 100.0% |
-| F1 | 0.541 |
+| F1 | 0.563 |
 | Feature mode | combined |
 | Labeling | Triple-barrier |
+| Search date | 2026-05-28 (post-fix) |
 
 ### SELL Detector (Current Champion)
-
-> **Note:** Same timeframe mismatch applied — new search pending after BUY retrain.
 
 | Parameter | Value |
 |-----------|-------|
@@ -274,6 +271,7 @@ Each run executes two passes:
 | Recall | 100.0% |
 | F1 | 0.573 |
 | Feature mode | catch22 |
+| Search date | 2026-04-15 (re-validated post-fix) |
 
 Optimised for recall (fast exits). Champion selection requires `recall ≥ 20%` and `precision ≥ 40%`, ranked by F1.
 
@@ -354,7 +352,7 @@ Default filters (configurable in `stock_picker/stock_screener.py`):
 | 6a | Streamlit monitoring dashboard | ✅ Complete |
 | 7 | Refinement (ensemble, market context, walk-forward) | ⏳ Planned |
 
-**Active work:** Full BUY + SELL system running on paper trading via GitHub Actions (9:30 AM and 1:30 PM ET, Mon–Fri). Streamlit dashboard live on Streamlit Community Cloud. Three bugs fixed 2026-05-27 (timeframe mismatch, wrong bracket order parameters, duplicate sync logging). New model search pending to produce champions validated against correct 4h inference.
+**Active work:** Full BUY + SELL system running on paper trading via GitHub Actions (9:30 AM and 1:30 PM ET, Mon–Fri). Streamlit dashboard live on Streamlit Community Cloud. Three bugs fixed 2026-05-27 (timeframe mismatch, wrong bracket order parameters, duplicate sync logging). BUY model re-searched 2026-05-28 against corrected 4h inference (new champion: window=21, horizon=6, 39.2% precision). SELL model retained from April (40.1% precision) — now receiving correct 4h inference for the first time.
 
 ## Development Roadmap
 

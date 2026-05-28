@@ -188,12 +188,17 @@ Three feature modes are supported:
 
 | Property | Value |
 |----------|-------|
-| Algorithm | Random Forest (XGBoost also searched) |
+| Algorithm | Random Forest |
+| Window size | 21 bars (4h) |
+| Horizon | 6 bars (4h) |
+| Take profit / Stop loss | 0.8% / 0.5% |
+| Decision threshold | 0.009 |
+| Precision / Recall / F1 | 39.2% / 100.0% / 0.563 |
 | Input | Combined features over rolling window |
 | Training data | 4-hour bars, 872 tickers |
 | Labeling | Triple-barrier (take-profit vs stop-loss) |
 | Champion selection | `precision ≥ 35–40%` → ranked by **recall** |
-| Threshold | Probability threshold tuned per search run |
+| Search date | 2026-05-28 (post-fix) |
 
 **Why maximize recall?** The SELL detector has 100% recall and cuts losing positions quickly. A bad BUY entry becomes a short, bounded loss. Missing a real BUY opportunity has no recovery path. So the BUY model is tuned to catch as many real entries as possible, accepting a precision floor of ~35–40% to avoid excessive commission drag.
 
@@ -201,11 +206,17 @@ Three feature modes are supported:
 
 | Property | Value |
 |----------|-------|
-| Algorithm | XGBoost (Random Forest also searched) |
+| Algorithm | XGBoost |
+| Window size | 20 bars (4h) |
+| Horizon | 5 bars (4h) |
+| Sell threshold | 0.5% |
+| Decision threshold | 0.040 |
+| Precision / Recall / F1 | 40.1% / 100.0% / 0.573 |
+| Runtime confidence floor | 0.30 (`--sell-confidence`) |
 | Input | Combined features (inverted labels — SELL is the positive class) |
 | Training data | 4-hour bars, same universe |
 | Champion selection | `precision ≥ 40%` and `recall ≥ 20%` → ranked by **F1** |
-| Runtime floor | `--sell-confidence` (default: 0.30) applied on top of model threshold |
+| Search date | 2026-04-15 (re-validated post-fix) |
 
 The model's baked-in decision threshold is intentionally sensitive. A **runtime confidence floor** is layered on top so the SELL signal only fires when the model's probability exceeds both the model threshold *and* this floor — preventing hairpin exits on marginal signals without requiring a full retrain.
 
