@@ -1,0 +1,17 @@
+{
+  "params": {
+    "window_size": 21,
+    "horizon": 9,
+    "take_profit": 0.008,
+    "stop_loss": 0.005,
+    "classifier": "random_forest",
+    "n_estimators": 200,
+    "max_depth": 8,
+    "min_precision": 0.35
+  },
+  "threshold": 0.0053589246736082796,
+  "precision": 0.37121066488361404,
+  "recall": 1.0,
+  "f1": 0.541434914984594,
+  "win_rate": 0.37121066488361404
+}

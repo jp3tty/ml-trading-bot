@@ -515,7 +515,7 @@ def run_scan(symbols=None, min_confidence=0.6, min_sell_confidence=0.3, dry_run=
                 logging.info(
                     f"{symbol}: BUY ORDER  qty={qty}  "
                     f"prob={prediction['probability']:.4f}  @ ${entry_price}  "
-                    f"TP=${take_profit}  SL=${stop_loss}"
+                    f"TP=None  SL=${stop_loss}"
                 )
         elif not in_top5:
             logging.info(
