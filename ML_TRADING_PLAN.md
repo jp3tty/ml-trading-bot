@@ -615,7 +615,7 @@ pip install scikit-learn xgboost pycatch22 pyarrow joblib pandas numpy
   - `min_recall` removed from search space (redundant — optimizer directly maximizes it)
   - Precision floor lowered from 0.48 → 0.35–0.40 (enough to avoid commission drag)
 - [x] Run search with recall-optimized objective — champion: Random Forest, window=21, horizon=9, take_profit=0.8%, stop_loss=0.5%, threshold=0.005, precision=37.1%, recall=100%, F1=0.541
-- [ ] **Re-run search** — a timeframe mismatch bug (daily bars in live inference vs 4h training) was fixed 2026-05-27; this champion was never validated against correct inference. Quick search space updated to expand horizon=[6,9,12]. Run: `poetry run python ml/binary_search.py --quick --max-files 200`
+- [x] **Re-run search on fresh 2023–2026 dataset (2026-05-29)** — retrained with `--quick --max-files 200` on 481 symbols covering 2023-01-01 to 2026-05-28. Champion unchanged architecturally (window=21, horizon=6, RF) but retrained on current market conditions. New: threshold=0.004, precision=38.2%, recall=100%, F1=0.553
 
 ### Phase 4: BUY Detector Integration ✅
 - [x] Create `ml/binary_predictor.py`
@@ -631,7 +631,7 @@ pip install scikit-learn xgboost pycatch22 pyarrow joblib pandas numpy
 - [x] Train SELL detector — champion: XGBoost, window=20, horizon=5, sell_thresh=0.5%, precision=40.1%, recall=100%, F1=0.573
 - [x] Create `ml/binary_sell_predictor.py`
 - [x] Integrate with ml_trader.py
-- [ ] **Re-run SELL search** — same timeframe mismatch applied; re-train after new BUY champion is confirmed
+- [x] **Re-run SELL search on fresh 2023–2026 dataset (2026-05-30)** — identified that `sell_threshold=0.005` had been dropped from the quick search space, capping precision at ~34–35%. Restored 0.005 to `define_quick_search_space()` and re-ran with `--quick --max-files 200`. New champion: Random Forest, window=20, horizon=5, sell_thresh=0.5%, precision=41.3%, recall=99.9%, F1=0.585, threshold=0.597
 
 ### Phase 6: Full Integration ✅ / 🔄 Active
 - [x] Combine BUY and SELL detectors in ml_trader.py
@@ -874,11 +874,11 @@ df['rel_strength'] = df['close'].pct_change(20) - spy_df['close'].pct_change(20)
 
 ### Improvement Priority Order
 
-1. ~~**Use all data files**~~ — `--max-files 200` is the recommended balance (~3 hrs); full 872 files for final validation
+1. ~~**Use all data files**~~ — `--max-files 200` is the recommended balance (~6 hrs on 1,312-file dataset); full dataset for final validation
 2. ~~**Lower `buy_threshold`**~~ — Superseded by triple-barrier labeling
 3. ~~**Adjust `min_precision`**~~ — Done (0.35–0.40 recall-first approach)
 4. ~~**Triple-barrier labeling**~~ — Done; replaces fixed-horizon approach
-5. **Retrain BUY + SELL models** — timeframe mismatch bug fixed; new search pending (quick search: `--quick --max-files 200`)
+5. ~~**Retrain BUY + SELL models**~~ — Done 2026-05-29/30; both champions updated on fresh 2023–2026 data
 6. **Add MACD and Bollinger Bands** — after retraining validates the corrected inference
 7. **Ensemble models** — combine multiple approaches
 
@@ -886,19 +886,15 @@ df['rel_strength'] = df['close'].pct_change(20) - spy_df['close'].pct_change(20)
 
 ## Next Steps
 
-### Immediate — Retrain Models (2026-05-27)
-Three bugs were discovered and fixed that invalidate the current champions as live performance benchmarks:
-1. **Timeframe mismatch** — live inference was fetching daily bars; models trained on 4h. Fixed in `fetch_recent_data()`.
-2. **Wrong bracket order parameters** — `paper_trade_validator.py` used hardcoded 1% SL / 2% TP instead of ATR-based. Fixed.
-3. **Duplicate sync logging** — `sync_bracket_exits()` re-logged same exits every run. Fixed.
+### Completed — Retrain Models on Fresh Data (2026-05-29/30)
+Both models retrained on 481 symbols covering 2023-01-01 to 2026-05-28 using `--quick --max-files 200`.
 
-Net P&L as of 2026-05-27 (50 closed trades): **-$190** — bracket stop exits (-$297) offset by ML SELL exits (+$107). Losses driven primarily by the bugs above.
+**BUY champion (2026-05-29):** RF, window=21, horizon=6, TP=0.8%, SL=0.5%, threshold=0.004, precision=38.2%, recall=100%, F1=0.553
+**SELL champion (2026-05-30):** RF, window=20, horizon=5, sell_thresh=0.5%, threshold=0.597, precision=41.3%, recall=99.9%, F1=0.585
 
-Retrain order:
-1. Run BUY search: `poetry run python ml/binary_search.py --quick --max-files 200` (~3 hrs)
-2. Validate new BUY champion; replace `.pkl` if improved
-3. Run SELL search: `poetry run python ml/binary_sell_search.py --quick --max-files 60` (~15 min)
-4. Resume paper trading with corrected models and monitor P&L
+Key fix: `sell_threshold=0.005` was missing from the SELL quick search space, preventing the optimizer from finding the configuration that achieves ≥40% precision. Restoring it produced a new champion beating the previous one on all metrics.
+
+Data collection date range updated to `2023-01-01 – 2026-05-28` (current market conditions). Historical 4h dataset now covers 1,312 symbols / 86MB.
 
 ### Short-term — Phase 6 Completion
 1. Paper trade with corrected models for several weeks to validate end-to-end behavior

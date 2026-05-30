@@ -249,33 +249,41 @@ Each run executes two passes:
 | Horizon | 6 bars (4h) |
 | Take profit | 0.8% |
 | Stop loss | 0.5% |
-| Decision threshold | 0.009 |
-| Precision | 39.2% |
+| Decision threshold | 0.004 |
+| Precision | 38.2% |
 | Recall | 100.0% |
-| F1 | 0.563 |
+| F1 | 0.553 |
 | Feature mode | combined |
 | Labeling | Triple-barrier |
-| Search date | 2026-05-28 (post-fix) |
+| Training data | 481 symbols, 2023-01-01 – 2026-05-28 |
+| Search date | 2026-05-29 |
 
 ### SELL Detector (Current Champion)
 
 | Parameter | Value |
 |-----------|-------|
-| Classifier | XGBoost |
+| Classifier | Random Forest |
 | Window size | 20 bars (4h) |
 | Horizon | 5 bars (4h) |
 | Sell threshold | 0.5% |
-| Decision threshold | 0.040 |
+| Decision threshold | 0.597 |
 | Runtime confidence floor | **0.30** |
-| Precision | 40.1% |
-| Recall | 100.0% |
-| F1 | 0.573 |
+| Precision | 41.3% |
+| Recall | 99.9% |
+| F1 | 0.585 |
 | Feature mode | catch22 |
-| Search date | 2026-04-15 (re-validated post-fix) |
+| Training data | 481 symbols, 2023-01-01 – 2026-05-28 |
+| Search date | 2026-05-30 |
 
-Optimised for recall (fast exits). Champion selection requires `recall ≥ 20%` and `precision ≥ 40%`, ranked by F1.
+Optimised for recall (fast exits). Champion selection requires `precision ≥ 40%`, ranked by F1.
 
-The model's baked-in decision threshold (0.040) is very sensitive by design. A **runtime confidence floor** (`--sell-confidence`, default `0.30`) is applied on top — the SELL signal only fires if the model's probability exceeds both the model threshold *and* this floor. This prevents hairpin exits on marginal signals without retraining.
+The `sell_threshold=0.005` (0.5% decline = SELL label) was inadvertently dropped from the quick search space in earlier runs, capping achievable precision at ~34–35%. Restoring it allowed the search to find the current champion at 41.3% precision. This threshold should remain in the quick search space.
+
+If the SELL detector is still exiting too early, levers to consider (in order of ease):
+1. Raise `--sell-confidence` at runtime (no retraining)
+2. Raise `min_recall` floor in search to push the optimizer toward higher-confidence signals
+3. Add a minimum hold time before SELL can fire
+4. Shorten `horizon` in the search space to filter slow-burn reversals
 
 ### Feature Modes
 
