@@ -76,7 +76,7 @@ class SellHyperparameterSearch:
         return {
             'window_size':    [15, 20, 30],
             'horizon':        [2, 3, 5],
-            'sell_threshold': [0.01, 0.015, 0.02],
+            'sell_threshold': [0.005, 0.01, 0.015, 0.02],
             'classifier':     ['random_forest', 'xgboost'],
             'n_estimators':   [100, 200],
             'max_depth':      [6, 8, 10],
