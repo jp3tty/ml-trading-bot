@@ -458,7 +458,7 @@ def run_scan(symbols=None, min_confidence=0.6, min_sell_confidence=0.3, dry_run=
                 logging.warning(f"{symbol}: BUY features could not be built")
                 continue
 
-            scored_candidates.append((symbol, prediction, current_price))
+            scored_candidates.append((symbol, prediction, current_price, df))
             logging.info(
                 f"{symbol}: scored  prob={prediction['probability']:.4f}  "
                 f"(threshold={prediction['threshold']:.4f})"
@@ -471,14 +471,14 @@ def run_scan(symbols=None, min_confidence=0.6, min_sell_confidence=0.3, dry_run=
     # Step 2: Rank by probability, keep top N (capped by open slots and 5-per-run limit)
     scored_candidates.sort(key=lambda x: x[1]['probability'], reverse=True)
     max_buys     = min(5, open_slots)
-    top5_symbols = {s for s, _, _ in scored_candidates[:max_buys]}
+    top5_symbols = {s for s, _, _, _ in scored_candidates[:max_buys]}
     logging.info(
         f"  Top {max_buys} of {len(scored_candidates)} scored: "
-        f"{[s for s, _, _ in scored_candidates[:max_buys]]}"
+        f"{[s for s, _, _, _ in scored_candidates[:max_buys]]}"
     )
 
     # Step 3: Act on top 5 only; log all
-    for symbol, prediction, current_price in scored_candidates:
+    for symbol, prediction, current_price, df in scored_candidates:
         action = 'NO_ACTION'
         in_top5 = symbol in top5_symbols
 
@@ -498,6 +498,8 @@ def run_scan(symbols=None, min_confidence=0.6, min_sell_confidence=0.3, dry_run=
                     stop_loss = round(live_price - 2.0 * atr, 2)
                 else:
                     stop_loss = round(live_price * 0.97, 2)  # 3% fallback
+                # Safety floor: SL must never be tighter than 3% below entry
+                stop_loss = min(stop_loss, round(live_price * 0.97, 2))
 
                 entry_price = round(live_price, 2)
                 order = conn.place_bracket_order(
