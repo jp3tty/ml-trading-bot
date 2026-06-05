@@ -52,8 +52,8 @@ class BinaryHyperparameterSearch:
         
     def define_search_space(self):
         """Full hyperparameter search space.
-        Optimizes for maximum recall subject to a minimum precision floor.
-        The SELL detector handles bad entries, so BUY recall matters more than precision.
+        Optimizes for F-beta (β=0.5), which weights precision 4× more than recall.
+        Target: 55%+ precision to produce a live win rate above 50%.
         """
         return {
             'window_size':   [10, 15, 20, 30],
@@ -63,14 +63,14 @@ class BinaryHyperparameterSearch:
             'classifier':    ['random_forest', 'xgboost'],
             'n_estimators':  [100, 200],
             'max_depth':     [5, 10, None],
-            'min_precision': [0.35, 0.40],
+            'min_precision': [0.50, 0.55],
         }
 
     def define_quick_search_space(self):
         """Focused search space (~240 combos, ~3 hrs with 200 files).
         Expands horizon to [6, 9, 12] since the previous champion was found
         with daily-bar inference (timeframe mismatch now fixed — re-search needed).
-        Optimizes for recall — SELL detector manages risk on bad entries.
+        Optimizes for F-beta (β=0.5) — precision-weighted to target 55%+ live win rate.
         """
         return {
             'window_size':   [21, 30],
@@ -80,7 +80,7 @@ class BinaryHyperparameterSearch:
             'classifier':    ['random_forest', 'xgboost'],
             'n_estimators':  [200],
             'max_depth':     [8, 12],
-            'min_precision': [0.35, 0.40],
+            'min_precision': [0.50, 0.55],
         }
     
     def load_data(self, window_size, horizon, take_profit, stop_loss, max_files=None):
@@ -151,13 +151,13 @@ class BinaryHyperparameterSearch:
                 eval_metric='aucpr'
             )
     
-    def find_optimal_threshold(self, y_true, y_proba, min_precision, min_recall=0.0):
-        """Find threshold maximizing recall subject to a minimum precision floor.
+    def find_optimal_threshold(self, y_true, y_proba, min_precision, min_recall=0.0,
+                               fbeta=0.5):
+        """Find threshold maximizing F-beta (β=0.5) subject to a minimum precision floor.
 
-        The BUY detector does not need to be right every time — bad entries are
-        handled by the SELL detector. So we prioritize catching as many real
-        opportunities as possible (high recall) while keeping precision above a
-        minimum floor to avoid excessive commission drag.
+        β=0.5 weights precision 4× more than recall. This biases the threshold
+        toward fewer but higher-quality signals — the change that was missing from
+        the original recall-maximizing objective that produced a 40% live win rate.
         """
         from sklearn.metrics import precision_recall_curve
 
@@ -168,9 +168,16 @@ class BinaryHyperparameterSearch:
         if not any(valid_idx):
             return thresholds[np.argmax(precisions[:-1])], False
 
-        # Among thresholds that meet the precision floor, pick the one with highest recall
-        valid_recalls = np.where(valid_idx, recalls[:-1], 0.0)
-        best_idx = np.argmax(valid_recalls)
+        # Compute F-beta for each valid threshold
+        beta2 = fbeta ** 2
+        p = precisions[:-1]
+        r = recalls[:-1]
+        denom = beta2 * p + r
+        fbeta_scores = np.where(denom > 0, (1 + beta2) * p * r / denom, 0.0)
+
+        # Pick threshold with best F-beta among those meeting the precision floor
+        valid_fbeta = np.where(valid_idx, fbeta_scores, 0.0)
+        best_idx = np.argmax(valid_fbeta)
         return thresholds[best_idx], True
     
     def evaluate_params(self, params):
@@ -269,9 +276,11 @@ class BinaryHyperparameterSearch:
             logging.info(f"  Precision: {precision:.3f}, Recall: {recall:.3f}, "
                         f"F1: {f1:.3f}, Win Rate: {win_rate:.1%}")
             
-            # Champion ranked by recall — SELL detector handles bad entries
-            if precision >= params.get('min_precision', 0.35):
-                score = recall
+            # Champion ranked by F-beta (β=0.5) — precision-weighted objective
+            if precision >= params.get('min_precision', 0.50):
+                beta2 = 0.25
+                denom = beta2 * precision + recall
+                score = (1 + beta2) * precision * recall / denom if denom > 0 else 0.0
                 if score > self.champion_score:
                     self.champion_score = score
                     self.champion = {
@@ -284,7 +293,7 @@ class BinaryHyperparameterSearch:
                         'f1': f1,
                         'win_rate': win_rate
                     }
-                    logging.info(f"  *** NEW CHAMPION! Precision: {precision:.1%}, Recall: {recall:.1%} ***")
+                    logging.info(f"  *** NEW CHAMPION! Precision: {precision:.1%}, Recall: {recall:.1%}, F0.5: {score:.3f} ***")
 
             return result
             
@@ -438,8 +447,10 @@ class BinaryHyperparameterSearch:
                     logging.info(f"  Precision: {precision:.3f}, Recall: {recall:.3f}, "
                                  f"F1: {f1:.3f}, Win Rate: {win_rate:.1%}")
 
-                    if precision >= params.get('min_precision', 0.35):
-                        score = recall  # Rank by recall — SELL handles bad entries
+                    if precision >= params.get('min_precision', 0.50):
+                        beta2 = 0.25
+                        denom = beta2 * precision + recall
+                        score = (1 + beta2) * precision * recall / denom if denom > 0 else 0.0
                         if score > self.champion_score:
                             self.champion_score = score
                             self.champion = {
@@ -452,7 +463,7 @@ class BinaryHyperparameterSearch:
                                 'f1':        f1,
                                 'win_rate':  win_rate,
                             }
-                            logging.info(f"  *** NEW CHAMPION! Precision: {precision:.1%}, Recall: {recall:.1%} ***")
+                            logging.info(f"  *** NEW CHAMPION! Precision: {precision:.1%}, Recall: {recall:.1%}, F0.5: {score:.3f} ***")
                             self._save_champion_json()
 
                     self.results.append(result)
@@ -483,17 +494,22 @@ class BinaryHyperparameterSearch:
         cols = ['window_size', 'horizon', 'take_profit', 'stop_loss',
                 'classifier', 'precision', 'recall', 'f1', 'win_rate']
 
-        # Top by recall (primary objective)
-        print("\nTop 5 by Recall (primary objective):")
-        print(df.nlargest(5, 'recall')[cols].to_string(index=False))
+        # Compute F-beta (β=0.5) for ranking
+        beta2 = 0.25
+        denom = beta2 * df['precision'] + df['recall']
+        df['fbeta_05'] = np.where(denom > 0, (1 + beta2) * df['precision'] * df['recall'] / denom, 0.0)
 
-        # Top by F1
-        print("\nTop 5 by F1 Score:")
-        print(df.nlargest(5, 'f1')[cols].to_string(index=False))
+        # Top by F-beta (β=0.5) — primary objective
+        print("\nTop 5 by F-beta β=0.5 (primary objective — precision-weighted):")
+        print(df.nlargest(5, 'fbeta_05')[cols + ['fbeta_05']].to_string(index=False))
 
         # Top by precision
         print("\nTop 5 by Precision:")
         print(df.nlargest(5, 'precision')[cols].to_string(index=False))
+
+        # Top by F1 (for reference)
+        print("\nTop 5 by F1 Score (for reference):")
+        print(df.nlargest(5, 'f1')[cols].to_string(index=False))
         
         if self.champion:
             print("\n" + "="*70)

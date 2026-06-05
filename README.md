@@ -8,14 +8,28 @@ Automated stock trading system using separate binary ML models for entry and exi
 
 | Detector | Objective | Tuned For |
 |----------|-----------|-----------|
-| **BUY** | Catch as many valid entries as possible | Recall — SELL handles bad entries |
+| **BUY** | Generate high-quality entry signals | F-beta (β=0.5) — precision-weighted; target 55%+ live win rate |
 | **SELL** | Detect early signs of decline | Recall — exit fast, miss fewer turns |
 
 The system defaults to **HOLD**. A position is only entered when the BUY detector fires, and only exited when the SELL detector triggers on a held position.
 
-### Architectural Decision (2026-05-06)
+### Architectural Decision (2026-06-05)
 
-The BUY detector is optimized for **recall over precision**. Because the SELL detector has 100% recall and cuts losing positions quickly, a bad BUY entry becomes a short, bounded loss rather than a catastrophe. Chasing high BUY precision was causing the model to miss the majority of real opportunities (near-zero recall). The precision floor is now set to 35–40% (enough to avoid excessive commission drag) while the threshold optimizer maximizes recall within that constraint. Champion selection ranks by recall, not F1.
+After 3 weeks of paper trading (80 closed trades), the recall-first BUY objective produced a 40% live win rate and -$401.93 net P&L. The SELL detector did not compensate for weak entries — it fired prematurely on some positions at large losses while ignoring others entirely. The BUY detector is now optimized for **precision over recall** using **F-beta (β=0.5)**, which weights precision 4× more than recall. The minimum precision floor is raised to 50–55%. Trade frequency will decrease but expected win rate should exceed the 50% break-even threshold.
+
+*Previous decision (2026-05-06, reversed):* The BUY detector was optimized for recall over precision on the assumption that the SELL detector would manage bad entries. Paper trading invalidated this assumption.
+
+### Performance Summary (2026-06-05)
+
+| Metric | Value |
+|--------|-------|
+| Paper trade period | May 12 – June 1, 2026 |
+| Closed trades | 80 |
+| Win rate | 40.0% |
+| Net P&L | -$401.93 |
+| Profit factor | 0.70 |
+
+Full analysis: [`reports/2026-06-05_performance_report.md`](reports/2026-06-05_performance_report.md)
 
 ### BUY Labeling: Triple-Barrier Method
 
@@ -98,6 +112,8 @@ ml-trading-bot/
 ├── stock_picker/
 │   └── stock_screener.py                # FinViz momentum screener
 ├── Streaming_Method/                    # Legacy pattern scanner
+├── reports/
+│   └── YYYY-MM-DD_performance_report.md # Periodic performance analyses
 ├── ML_TRADING_PLAN.md                   # Implementation roadmap
 ├── pyproject.toml
 └── README.md
@@ -240,7 +256,11 @@ Each run executes two passes:
 
 ## Models
 
-### BUY Detector (Current Champion)
+### BUY Detector
+
+> **Retraining in progress** — precision-focused search launched 2026-06-05. New champion pending.
+
+**Previous champion (recall-first, replaced):**
 
 | Parameter | Value |
 |-----------|-------|
@@ -295,10 +315,10 @@ If the SELL detector is still exiting too early, levers to consider (in order of
 
 ### Champion Selection
 
-**BUY**: `precision ≥ min_precision` (searched: 0.35–0.40) → ranked by **recall**
+**BUY**: `precision ≥ min_precision` (searched: 0.50–0.55) → ranked by **F-beta (β=0.5)**
 **SELL**: `recall ≥ 20%` and `precision ≥ 40%` → ranked by F1
 
-The BUY threshold is chosen to maximize recall subject to the precision floor. The SELL threshold is chosen to maximize F1 subject to both floors.
+The BUY threshold is chosen to maximize F-beta (β=0.5) subject to the precision floor — this weights precision 4× more than recall. The SELL threshold is chosen to maximize F1 subject to both floors.
 
 ## Output Files
 
@@ -353,14 +373,15 @@ Default filters (configurable in `stock_picker/stock_screener.py`):
 |-------|-------------|--------|
 | 1 | Data collection (daily + 4h parquet) | ✅ Complete |
 | 2 | Feature engineering (catch22 + indicators + combined) | ✅ Complete |
-| 3 | BUY detector training + champion selection | ✅ Complete |
+| 3 | BUY detector training + champion selection | 🔄 Retraining (precision-focused) |
 | 4 | BUY detector integrated into trading loop | ✅ Complete |
 | 5 | SELL detector training + champion selection | ✅ Complete |
 | 6 | Full BUY + SELL integration + paper trading | 🔄 In progress |
 | 6a | Streamlit monitoring dashboard | ✅ Complete |
+| 6b | Performance analysis + objective pivot | ✅ Complete (2026-06-05) |
 | 7 | Refinement (ensemble, market context, walk-forward) | ⏳ Planned |
 
-**Active work:** Full BUY + SELL system running on paper trading via GitHub Actions (9:30 AM and 1:30 PM ET, Mon–Fri). Streamlit dashboard live on Streamlit Community Cloud. Three bugs fixed 2026-05-27 (timeframe mismatch, wrong bracket order parameters, duplicate sync logging). BUY model re-searched 2026-05-28 against corrected 4h inference (new champion: window=21, horizon=6, 39.2% precision). SELL model retained from April (40.1% precision) — now receiving correct 4h inference for the first time.
+**Active work:** BUY model retraining in progress (2026-06-05) using precision-weighted F-beta (β=0.5) objective, precision floor 50–55%. Triggered by 3-week paper trade analysis showing 40% win rate and -$401.93 P&L. Full BUY + SELL system continues running on paper via GitHub Actions (9:30 AM and 1:30 PM ET, Mon–Fri). Streamlit dashboard live. Performance report at [`reports/2026-06-05_performance_report.md`](reports/2026-06-05_performance_report.md).
 
 ## Development Roadmap
 

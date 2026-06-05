@@ -283,23 +283,27 @@ SELL labels remain fixed-horizon for now. Triple-barrier could be applied here t
 
 Combinations where `stop_loss >= take_profit` are filtered out (must have positive reward:risk).
 
-### Metric Targets — Architectural Decision (2026-05-06)
+### Metric Targets — Architectural Decision (2026-06-05, current)
 
-The BUY detector is now optimized for **recall over precision**. Key reasoning:
+The BUY detector is now optimized for **precision over recall** using **F-beta (β=0.5)**. Key reasoning:
 
-- The SELL detector has 100% recall — it catches every declining position and exits quickly
-- A bad BUY entry becomes a short, bounded loss; it does not need to be avoided at all costs
-- Chasing high BUY precision (≥ 48%) was causing near-zero recall — the model missed almost all real opportunities
-- Enough precision to avoid excessive commission drag is the only hard requirement
+- 3 weeks of paper trading (80 closed trades) produced a 40% win rate and -$401.93 net P&L
+- The SELL detector did not compensate for weak entry quality — it fired prematurely on some positions while not compensating for the volume of bad BUY entries
+- A 40% win rate with near-equal win/loss sizes cannot be profitable regardless of SELL behavior
+- 50%+ precision is the minimum viable threshold for profitability before spreads and slippage
 
 | Metric | Target | Why |
 |--------|--------|-----|
-| **Recall** | Maximize | Catch as many real entries as possible |
-| **Precision** | ≥ 35–40% floor | Avoid excessive commission drag from constant bad entries |
-| **F1** | Not the primary objective | Replaced by recall as the ranking metric |
+| **Precision** | ≥ 50–55% floor | Must exceed break-even win rate after costs |
+| **F-beta (β=0.5)** | Maximize | Weights precision 4× more than recall — primary ranking metric |
+| **Recall** | Accept lower | Fewer trades, each higher quality |
 
-Champion selection ranks by **recall** (not F1) among models that meet the precision floor.
-Threshold optimization picks the lowest threshold that still meets the precision floor, maximizing recall.
+Champion selection ranks by **F-beta (β=0.5)** among models that meet the precision floor.
+Threshold optimization picks the threshold that maximizes F-beta (β=0.5) subject to the precision floor.
+
+#### Previous Decision (2026-05-06, reversed)
+
+The BUY detector was optimized for recall over precision on the assumption that the SELL detector would manage bad entries. The precision floor was set to 35–40%. Paper trading invalidated this assumption. See [`reports/2026-06-05_performance_report.md`](reports/2026-06-05_performance_report.md) for the full analysis.
 
 ---
 
@@ -377,16 +381,18 @@ champion = search.run_search(quick=True)
 
 ### Champion Selection Criteria
 
-Champions are selected by **highest recall** subject to a minimum precision floor (0.35–0.40). The decision threshold is chosen by `find_optimal_threshold()`, which picks the lowest threshold that still meets the precision floor, directly maximizing recall:
+Champions are selected by **highest F-beta (β=0.5)** subject to a minimum precision floor (0.50–0.55). The decision threshold is chosen by `find_optimal_threshold()`, which picks the threshold that maximizes F-beta (β=0.5) among thresholds meeting the precision floor:
 
 ```python
 # Precision floor enforced during threshold selection:
 valid_idx = precisions >= min_precision
-# Lowest valid threshold chosen → maximizes recall
-# Champion requires: precision >= min_precision, ranked by recall
+# F-beta (β=0.5) computed for each valid threshold — best one wins
+beta2 = 0.25  # β=0.5 → β²=0.25
+fbeta_scores = (1 + beta2) * p * r / (beta2 * p + r)
+# Champion requires: precision >= min_precision, ranked by F-beta
 ```
 
-Search space for the floor: `min_precision ∈ [0.35, 0.40]`. (`min_recall` was removed from the search space — the optimizer maximizes recall directly.)
+Search space for the floor: `min_precision ∈ [0.50, 0.55]`.
 
 ---
 
@@ -616,6 +622,7 @@ pip install scikit-learn xgboost pycatch22 pyarrow joblib pandas numpy
   - Precision floor lowered from 0.48 → 0.35–0.40 (enough to avoid commission drag)
 - [x] Run search with recall-optimized objective — champion: Random Forest, window=21, horizon=9, take_profit=0.8%, stop_loss=0.5%, threshold=0.005, precision=37.1%, recall=100%, F1=0.541
 - [x] **Re-run search on fresh 2023–2026 dataset (2026-05-29)** — retrained with `--quick --max-files 200` on 481 symbols covering 2023-01-01 to 2026-05-28. Champion unchanged architecturally (window=21, horizon=6, RF) but retrained on current market conditions. New: threshold=0.004, precision=38.2%, recall=100%, F1=0.553
+- [ ] **Re-run search with precision-weighted objective (2026-06-05, in progress)** — switched from recall-first to F-beta (β=0.5), precision floor 50–55%. Triggered by 3-week paper trade analysis: 40% win rate, -$401.93 P&L. Running `--quick` on all 1,312 files (240 combinations).
 
 ### Phase 4: BUY Detector Integration ✅
 - [x] Create `ml/binary_predictor.py`
@@ -657,8 +664,11 @@ pip install scikit-learn xgboost pycatch22 pyarrow joblib pandas numpy
 - [x] Fixed timeframe mismatch — live inference was fetching daily bars (TimeFrame.Day) but the models were trained on 4-hour bars; changed fetch_recent_data() to TimeFrame(4h), lookback reduced to 60 days (~300 4h bars, well above minimum) (2026-05-27)
 - [x] Fixed paper_trade_validator.py bracket order parameters — was using hardcoded 1% SL / 2% TP; now uses ATR-based stop (2×ATR, 3% fallback) and TP disabled, matching ml_trader.py intent (2026-05-27)
 - [x] Cleaned orders.csv — removed 24 duplicate SELL rows created by the old sync function (2026-05-27)
-- [ ] Monitor paper trade results and P&L via dashboard
+- [x] Monitor paper trade results and P&L via dashboard — 3-week analysis complete (2026-06-05); see `reports/2026-06-05_performance_report.md`
 - [ ] Build backtesting framework
+- [ ] Implement one-lot-per-symbol rule (prevent pyramid buying across sessions)
+- [ ] Add time-of-day guard (no BUY orders after 3:45 PM ET)
+- [ ] Add max hold period (force-close positions held > 7 trading days)
 
 ### Phase 7: Refinement ⏳
 - [ ] Ensemble multiple models
@@ -694,9 +704,10 @@ For early-exit trading strategy:
 | 60% | 20% | Many | ✅ Sweet spot |
 | 55% | 35% | Very many | ✅ Good if fees are low |
 | 50% | 50% | Too many | ❌ Break-even before fees |
-| **37%** | **100%** | **Very many** | **⚠️ Current — SELL detector limits downside** |
+| **37%** | **100%** | **Very many** | **❌ Previous — produced 40% win rate in paper trading** |
+| **55%** | **~50%** | **Moderate** | **🎯 Target — precision-weighted retrain in progress** |
 
-**Current approach (2026-05-06):** Maximize recall subject to a 35–40% precision floor. The SELL detector's fast exits bound losses from bad BUY entries, making high recall viable even at 37% precision.
+**Current approach (2026-06-05):** Maximize F-beta (β=0.5) subject to a 50–55% precision floor. Paper trading (May 12 – June 1, 2026) showed the recall-first approach produced a 40% live win rate — insufficient for profitability regardless of SELL model behavior.
 
 ---
 
@@ -886,21 +897,29 @@ df['rel_strength'] = df['close'].pct_change(20) - spy_df['close'].pct_change(20)
 
 ## Next Steps
 
+### Active — BUY Model Precision Retraining (2026-06-05)
+
+Triggered by 3-week paper trade analysis (May 12 – June 1, 2026): 80 closed trades, 40% win rate, -$401.93 net P&L, profit factor 0.70. Full report: `reports/2026-06-05_performance_report.md`.
+
+Changes made to `ml/binary_search.py`:
+- `find_optimal_threshold()` now maximizes F-beta (β=0.5) instead of recall
+- Champion ranking changed from `score = recall` to `score = F-beta(β=0.5)`
+- `min_precision` floor raised from `[0.35, 0.40]` to `[0.50, 0.55]`
+- Print summary updated to sort by F-beta (β=0.5) as primary objective
+
+Running: `poetry run python ml/binary_search.py --quick` (240 combinations, ~1,312 files)
+
 ### Completed — Retrain Models on Fresh Data (2026-05-29/30)
 Both models retrained on 481 symbols covering 2023-01-01 to 2026-05-28 using `--quick --max-files 200`.
 
-**BUY champion (2026-05-29):** RF, window=21, horizon=6, TP=0.8%, SL=0.5%, threshold=0.004, precision=38.2%, recall=100%, F1=0.553
+**BUY champion (2026-05-29, superseded):** RF, window=21, horizon=6, TP=0.8%, SL=0.5%, threshold=0.004, precision=38.2%, recall=100%, F1=0.553
 **SELL champion (2026-05-30):** RF, window=20, horizon=5, sell_thresh=0.5%, threshold=0.597, precision=41.3%, recall=99.9%, F1=0.585
 
-Key fix: `sell_threshold=0.005` was missing from the SELL quick search space, preventing the optimizer from finding the configuration that achieves ≥40% precision. Restoring it produced a new champion beating the previous one on all metrics.
-
-Data collection date range updated to `2023-01-01 – 2026-05-28` (current market conditions). Historical 4h dataset now covers 1,312 symbols / 86MB.
-
 ### Short-term — Phase 6 Completion
-1. Paper trade with corrected models for several weeks to validate end-to-end behavior
-2. Track P&L, exit types (ATR stop vs SELL Signal), and indicator context per trade
-3. Build a simple backtesting framework against existing parquet files
-4. Assess live precision vs training precision to detect overfitting
+1. Deploy new precision-weighted BUY champion when retraining completes
+2. Paper trade with new model to validate improved win rate
+3. Implement one-lot-per-symbol guard and max hold period (see checklist)
+4. Build a simple backtesting framework against existing parquet files
 
 ### Medium-term — Phase 7 Refinement
 1. Add market context features (SPY trend, VIX level, sector ETF performance)

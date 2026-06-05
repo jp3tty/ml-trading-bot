@@ -23,7 +23,7 @@ The system uses an **early-exit short-term trading** strategy built around two i
 
 | Detector | Question | Tuned For |
 |----------|----------|-----------|
-| **BUY** | Is this a valid entry? | Recall — catch as many real entries as possible |
+| **BUY** | Is this a valid entry? | F-beta (β=0.5) — precision-weighted; target 55%+ live win rate |
 | **SELL** | Is this position turning? | Recall — exit at the first sign of decline |
 
 The system defaults to **HOLD**. A position is only entered when the BUY detector fires above a confidence threshold, and only exited when the SELL detector fires on a currently held position.
@@ -32,10 +32,14 @@ The system defaults to **HOLD**. A position is only entered when the BUY detecto
 
 A single 3-class model (BUY / HOLD / SELL) cannot tune entry and exit independently. Separating them allows:
 
-- The **BUY detector** to cast a wide net (high recall), accepting some false positives
-- The **SELL detector** to act as the risk manager, cutting losing positions quickly before they compound
+- The **BUY detector** to be tuned for precision-weighted quality signals, reducing false-positive entries
+- The **SELL detector** to act as the safety net, cutting losing positions before they compound
 
-Bad BUY entries become short, bounded losses rather than catastrophes. This shifts the optimization surface: instead of chasing BUY precision, the system maximizes BUY recall and relies on fast SELL exits to manage downside.
+### Objective History
+
+**2026-05-06:** BUY detector switched to recall-first (precision floor 35–40%, ranked by recall). Rationale: SELL detector's 100% recall would bound losses from bad entries.
+
+**2026-06-05 (current):** Reversed to precision-first (F-beta β=0.5, precision floor 50–55%). Rationale: 3-week paper trade produced 40% win rate (-$401.93 P&L). The SELL detector fired prematurely on some positions at large losses while not compensating for the volume of bad BUY entries. A 40% win rate with near-equal average win/loss cannot be profitable regardless of SELL behavior.
 
 ---
 
@@ -79,8 +83,8 @@ Bad BUY entries become short, bounded losses rather than catastrophes. This shif
 │  · n_estimators, depth   │          │  · n_estimators, depth      │
 │                          │          │                             │
 │  Champion selection:     │          │  Champion selection:        │
-│  precision ≥ 35–40%      │          │  precision ≥ 40%            │
-│  ranked by recall        │          │  recall ≥ 20%               │
+│  precision ≥ 50–55%      │          │  precision ≥ 40%            │
+│  ranked by F-beta(β=0.5) │          │  recall ≥ 20%               │
 │                          │          │  ranked by F1               │
 │  champion_buy.pkl        │          │  champion_sell.pkl          │
 └──────────────┬───────────┘          └──────────────┬──────────────┘
@@ -186,6 +190,10 @@ Three feature modes are supported:
 
 ### BUY Detector
 
+> **Retraining in progress** — precision-focused search launched 2026-06-05. New champion pending.
+
+**Previous champion (recall-first, replaced after 3-week paper trade analysis):**
+
 | Property | Value |
 |----------|-------|
 | Algorithm | Random Forest |
@@ -197,10 +205,10 @@ Three feature modes are supported:
 | Input | Combined features over rolling window |
 | Training data | 4-hour bars, 872 tickers |
 | Labeling | Triple-barrier (take-profit vs stop-loss) |
-| Champion selection | `precision ≥ 35–40%` → ranked by **recall** |
-| Search date | 2026-05-28 (post-fix) |
+| Champion selection | `precision ≥ 50–55%` → ranked by **F-beta (β=0.5)** |
+| Search date | 2026-05-28 (prior) / 2026-06-05 (retraining) |
 
-**Why maximize recall?** The SELL detector has 100% recall and cuts losing positions quickly. A bad BUY entry becomes a short, bounded loss. Missing a real BUY opportunity has no recovery path. So the BUY model is tuned to catch as many real entries as possible, accepting a precision floor of ~35–40% to avoid excessive commission drag.
+**Why precision-weighted?** 3 weeks of paper trading (80 closed trades) produced a 40% win rate. A 40% win rate with near-equal win/loss sizes cannot be profitable regardless of SELL model behavior. The new objective uses F-beta (β=0.5), which weights precision 4× more than recall, targeting 55%+ live win rate. Trade frequency will decrease but signal quality will increase.
 
 ### SELL Detector
 
@@ -341,8 +349,8 @@ Every signal scored (including non-triggers) is appended to `signals.csv` for po
 **Triple-barrier labeling over fixed-horizon returns.**
 A simple "did price go up 1% in 5 days?" label ignores path and creates asymmetric risk. Triple-barrier labels tie directly to actual trade outcomes — a BUY label means the take-profit would have been hit before the stop-loss, so the model learns setups that produce real positive reward:risk, not just directional moves.
 
-**Recall-first BUY, F1-first SELL.**
-These objectives reflect what matters at each stage. A missed BUY is a missed opportunity with no recovery. A bad SELL is also bad, but the ATR stop provides a floor. So BUY is tuned to miss as few real entries as possible; SELL is balanced between not missing exits and not creating excessive churn.
+**Precision-weighted BUY (F-beta β=0.5), F1-first SELL.**
+These objectives reflect what matters at each stage. The BUY model must generate signals with a win rate above 50% to be profitable — paper trading at 40% win rate validated that recall-first was insufficient even with a fast SELL detector. F-beta (β=0.5) weights precision 4× more than recall. SELL is balanced between not missing exits and not creating excessive churn (F1).
 
 **Independent champion models with runtime overrides.**
 Each model is promoted to production as a `.pkl` file, independent of the other. The runtime `--sell-confidence` flag provides a soft tuning layer between retrains — adjusting sensitivity without touching the model. This decouples operational tuning from the (expensive) search-and-retrain cycle.
