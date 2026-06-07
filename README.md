@@ -256,27 +256,26 @@ Each run executes two passes:
 
 ## Models
 
-### BUY Detector
-
-> **Retraining in progress** — precision-focused search launched 2026-06-05. New champion pending.
-
-**Previous champion (recall-first, replaced):**
+### BUY Detector (Current Champion)
 
 | Parameter | Value |
 |-----------|-------|
-| Classifier | Random Forest |
-| Window size | 21 bars (4h) |
-| Horizon | 6 bars (4h) |
-| Take profit | 0.8% |
-| Stop loss | 0.5% |
-| Decision threshold | 0.004 |
-| Precision | 38.2% |
-| Recall | 100.0% |
-| F1 | 0.553 |
+| Classifier | XGBoost |
+| Window size | 30 bars (4h) |
+| Horizon | 12 bars (4h) ≈ 48 hours |
+| Take profit (label) | 1.0% |
+| Stop loss (label) | 0.8% |
+| Decision threshold | 0.777 |
+| Precision | 50.0% |
+| Recall | 49.2% |
+| F1 | 0.496 |
 | Feature mode | combined |
 | Labeling | Triple-barrier |
-| Training data | 481 symbols, 2023-01-01 – 2026-05-28 |
-| Search date | 2026-05-29 |
+| Training data | 1,312 symbols, 2023-01-01 – 2026-05-28 |
+| Search date | 2026-06-05 (full dataset, precision-weighted) |
+
+**Previous champion (recall-first, superseded after paper trade analysis):**
+Random Forest, window=21, horizon=6, 38.2% precision, 100% recall — produced 40% live win rate.
 
 ### SELL Detector (Current Champion)
 
@@ -373,7 +372,7 @@ Default filters (configurable in `stock_picker/stock_screener.py`):
 |-------|-------------|--------|
 | 1 | Data collection (daily + 4h parquet) | ✅ Complete |
 | 2 | Feature engineering (catch22 + indicators + combined) | ✅ Complete |
-| 3 | BUY detector training + champion selection | 🔄 Retraining (precision-focused) |
+| 3 | BUY detector training + champion selection | ✅ Complete (precision-weighted retrain 2026-06-07) |
 | 4 | BUY detector integrated into trading loop | ✅ Complete |
 | 5 | SELL detector training + champion selection | ✅ Complete |
 | 6 | Full BUY + SELL integration + paper trading | 🔄 In progress |
@@ -381,7 +380,7 @@ Default filters (configurable in `stock_picker/stock_screener.py`):
 | 6b | Performance analysis + objective pivot | ✅ Complete (2026-06-05) |
 | 7 | Refinement (ensemble, market context, walk-forward) | ⏳ Planned |
 
-**Active work:** BUY model retraining in progress (2026-06-05) using precision-weighted F-beta (β=0.5) objective, precision floor 50–55%. Triggered by 3-week paper trade analysis showing 40% win rate and -$401.93 P&L. Full BUY + SELL system continues running on paper via GitHub Actions (9:30 AM and 1:30 PM ET, Mon–Fri). Streamlit dashboard live. Performance report at [`reports/2026-06-05_performance_report.md`](reports/2026-06-05_performance_report.md).
+**Active work:** New precision-weighted BUY champion deployed (2026-06-07) — XGBoost, window=30, horizon=12, 50% precision / 49.2% recall. Replaces recall-first model that produced 40% live win rate. Full BUY + SELL system running on paper via GitHub Actions (9:30 AM and 1:30 PM ET, Mon–Fri). Streamlit dashboard live. Performance report at [`reports/2026-06-05_performance_report.md`](reports/2026-06-05_performance_report.md).
 
 ## Development Roadmap
 

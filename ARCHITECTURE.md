@@ -190,25 +190,23 @@ Three feature modes are supported:
 
 ### BUY Detector
 
-> **Retraining in progress** — precision-focused search launched 2026-06-05. New champion pending.
-
-**Previous champion (recall-first, replaced after 3-week paper trade analysis):**
-
 | Property | Value |
 |----------|-------|
-| Algorithm | Random Forest |
-| Window size | 21 bars (4h) |
-| Horizon | 6 bars (4h) |
-| Take profit / Stop loss | 0.8% / 0.5% |
-| Decision threshold | 0.009 |
-| Precision / Recall / F1 | 39.2% / 100.0% / 0.563 |
+| Algorithm | XGBoost |
+| Window size | 30 bars (4h) |
+| Horizon | 12 bars (4h) ≈ 48 hours |
+| Take profit / Stop loss (labels) | 1.0% / 0.8% |
+| Decision threshold | 0.777 |
+| Precision / Recall / F1 | 50.0% / 49.2% / 0.496 |
 | Input | Combined features over rolling window |
-| Training data | 4-hour bars, 872 tickers |
+| Training data | 4-hour bars, 1,312 tickers |
 | Labeling | Triple-barrier (take-profit vs stop-loss) |
-| Champion selection | `precision ≥ 50–55%` → ranked by **F-beta (β=0.5)** |
-| Search date | 2026-05-28 (prior) / 2026-06-05 (retraining) |
+| Champion selection | `precision ≥ 50%` → ranked by **F-beta (β=0.5)** |
+| Search date | 2026-06-07 (full dataset, precision-weighted) |
 
-**Why precision-weighted?** 3 weeks of paper trading (80 closed trades) produced a 40% win rate. A 40% win rate with near-equal win/loss sizes cannot be profitable regardless of SELL model behavior. The new objective uses F-beta (β=0.5), which weights precision 4× more than recall, targeting 55%+ live win rate. Trade frequency will decrease but signal quality will increase.
+**Why precision-weighted?** 3 weeks of paper trading (80 closed trades) produced a 40% win rate and -$401.93 P&L. A 40% win rate with near-equal win/loss sizes cannot be profitable regardless of SELL model behavior. The new objective uses F-beta (β=0.5), which weights precision 4× more than recall. Trade frequency is lower but signal quality is higher.
+
+**Previous champion (superseded):** Random Forest, window=21, horizon=6, 38.2% precision, 100% recall.
 
 ### SELL Detector
 

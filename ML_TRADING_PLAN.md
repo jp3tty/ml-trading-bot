@@ -622,7 +622,7 @@ pip install scikit-learn xgboost pycatch22 pyarrow joblib pandas numpy
   - Precision floor lowered from 0.48 → 0.35–0.40 (enough to avoid commission drag)
 - [x] Run search with recall-optimized objective — champion: Random Forest, window=21, horizon=9, take_profit=0.8%, stop_loss=0.5%, threshold=0.005, precision=37.1%, recall=100%, F1=0.541
 - [x] **Re-run search on fresh 2023–2026 dataset (2026-05-29)** — retrained with `--quick --max-files 200` on 481 symbols covering 2023-01-01 to 2026-05-28. Champion unchanged architecturally (window=21, horizon=6, RF) but retrained on current market conditions. New: threshold=0.004, precision=38.2%, recall=100%, F1=0.553
-- [ ] **Re-run search with precision-weighted objective (2026-06-05, in progress)** — switched from recall-first to F-beta (β=0.5), precision floor 50–55%. Triggered by 3-week paper trade analysis: 40% win rate, -$401.93 P&L. Running `--quick` on all 1,312 files (240 combinations).
+- [x] **Re-run search with precision-weighted objective (2026-06-07, complete)** — switched from recall-first to F-beta (β=0.5), precision floor 50–55%. Ran `--quick` on all 1,312 files (240 combinations, ~45 hrs). New champion: XGBoost, window=30, horizon=12, take_profit=1.0%, stop_loss=0.8%, threshold=0.777, precision=50.0%, recall=49.2%, F1=0.496.
 
 ### Phase 4: BUY Detector Integration ✅
 - [x] Create `ml/binary_predictor.py`
@@ -897,7 +897,7 @@ df['rel_strength'] = df['close'].pct_change(20) - spy_df['close'].pct_change(20)
 
 ## Next Steps
 
-### Active — BUY Model Precision Retraining (2026-06-05)
+### Completed — BUY Model Precision Retraining (2026-06-07)
 
 Triggered by 3-week paper trade analysis (May 12 – June 1, 2026): 80 closed trades, 40% win rate, -$401.93 net P&L, profit factor 0.70. Full report: `reports/2026-06-05_performance_report.md`.
 
@@ -907,7 +907,7 @@ Changes made to `ml/binary_search.py`:
 - `min_precision` floor raised from `[0.35, 0.40]` to `[0.50, 0.55]`
 - Print summary updated to sort by F-beta (β=0.5) as primary objective
 
-Running: `poetry run python ml/binary_search.py --quick` (240 combinations, ~1,312 files)
+**New champion:** XGBoost, window=30, horizon=12, take_profit=1.0%, stop_loss=0.8%, threshold=0.777, precision=50.0%, recall=49.2%, F1=0.496. Deployed to `models/binary_search_results/champion_buy.pkl` — live from Monday 2026-06-09.
 
 ### Completed — Retrain Models on Fresh Data (2026-05-29/30)
 Both models retrained on 481 symbols covering 2023-01-01 to 2026-05-28 using `--quick --max-files 200`.
