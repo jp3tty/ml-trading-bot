@@ -129,13 +129,13 @@ class MLTrader:
             logging.error(f"Error fetching held positions: {e}")
             return {}
 
-    def fetch_recent_data(self, symbol, lookback_days=60):
+    def fetch_recent_data(self, symbol, lookback_days=90):
         """Fetch 4-hour bars to match the timeframe the models were trained on.
 
         Training used saved_data/historical_4h (TimeFrame 4h). Live inference
         must use the same timeframe or the features are meaningless.
-        60 calendar days → ~300 four-hour bars, well above the 80-bar minimum
-        (window_size=21 + horizon=9 + 50 buffer).
+        90 calendar days → ~120 four-hour bars, above the 92-bar minimum
+        (window_size=30 + horizon=12 + 50 buffer).
         """
         try:
             df = self.conn.get_historical_data(
@@ -259,7 +259,7 @@ class MLTrader:
         for symbol, position in held.items():
             try:
                 df = self.fetch_recent_data(symbol)
-                if df is None or len(df) < 50:
+                if df is None or len(df) < 100:
                     logging.warning(f"{symbol}: insufficient data for SELL check")
                     continue
 
@@ -324,7 +324,7 @@ class MLTrader:
         for symbol in buy_candidates:
             try:
                 df = self.fetch_recent_data(symbol)
-                if df is None or len(df) < 50:
+                if df is None or len(df) < 100:
                     logging.warning(f"{symbol}: insufficient data for BUY check")
                     continue
 

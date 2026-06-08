@@ -104,6 +104,10 @@ def sync_bracket_exits(conn, alpaca_held_symbols):
     Any symbol open in the log but absent from Alpaca was closed by a bracket
     order — we fetch the actual fill price from Alpaca order history and write
     a BRACKET_EXIT sell row so the log stays accurate.
+
+    Paginates forward (asc) from the earliest relevant BUY so old fills beyond
+    a single 500-order window are not missed.  Any symbol still unresolved after
+    exhausting Alpaca history gets a RECONCILE row to zero the books.
     """
     if not os.path.exists(ORDER_LOG) or os.path.getsize(ORDER_LOG) == 0:
         return
@@ -111,14 +115,15 @@ def sync_bracket_exits(conn, alpaca_held_symbols):
     with open(ORDER_LOG, newline='') as f:
         rows = list(csv.DictReader(f))
 
-    # Order IDs already recorded — never log the same Alpaca order twice
+    # Exclude synthetic rows so they are never treated as real Alpaca fills
     existing_order_ids = {
         r['order_id'] for r in rows
-        if r.get('order_id') and r['order_id'] not in ('N/A', '')
+        if r.get('order_id') and r['order_id'] not in ('N/A', '', 'RECONCILE')
     }
 
-    # Net open qty per symbol from our log
+    # Net open qty per symbol; track the last BUY timestamp for each symbol
     net_qty = defaultdict(int)
+    last_buy_ts = {}
     for r in rows:
         try:
             qty = int(r.get('qty', 0) or 0)
@@ -126,6 +131,7 @@ def sync_bracket_exits(conn, alpaca_held_symbols):
             continue
         if r['side'] == 'BUY':
             net_qty[r['symbol']] += qty
+            last_buy_ts[r['symbol']] = r['timestamp'][:19]
         elif r['side'] == 'SELL':
             net_qty[r['symbol']] -= qty
 
@@ -141,43 +147,60 @@ def sync_bracket_exits(conn, alpaca_held_symbols):
         f"{sorted(bracket_closed)}"
     )
 
-    # Fetch closed orders from Alpaca once; filter per symbol client-side
-    try:
-        earliest = rows[0]['timestamp'][:10] if rows else None
-        closed_orders = conn.api.list_orders(
-            status='closed',
-            limit=500,
-            direction='desc',
-            after=earliest,
-        )
-    except Exception as e:
-        logging.error(f"sync_bracket_exits: could not fetch order history: {e}")
-        return
+    # Paginate forward from the earliest last-BUY date among unresolved symbols.
+    # direction='asc' + after=<timestamp> ensures old fills aren't cut off by a
+    # fixed limit=500 window the way direction='desc' would.
+    page_after = min(
+        last_buy_ts.get(sym, rows[0]['timestamp'][:19]) for sym in bracket_closed
+    )
 
-    # Index all sell fills by symbol, excluding already-logged order IDs
     sell_fills = defaultdict(list)
-    for o in closed_orders:
-        if (
-            o.side == 'sell'
-            and o.filled_avg_price
-            and float(getattr(o, 'filled_qty', 0) or 0) > 0
-            and o.id not in existing_order_ids
-        ):
-            sell_fills[o.symbol].append(o)
+    MAX_PAGES = 20
+    for _ in range(MAX_PAGES):
+        try:
+            batch = conn.api.list_orders(
+                status='closed',
+                limit=500,
+                direction='asc',
+                after=page_after,
+            )
+        except Exception as e:
+            logging.error(f"sync_bracket_exits: could not fetch order history: {e}")
+            break
+
+        if not batch:
+            break
+
+        for o in batch:
+            if (
+                o.side == 'sell'
+                and o.filled_avg_price
+                and float(getattr(o, 'filled_qty', 0) or 0) > 0
+                and o.id not in existing_order_ids
+                and o.symbol in bracket_closed
+            ):
+                sell_fills[o.symbol].append(o)
+
+        if len(batch) < 500:
+            break  # reached end of order history
+
+        last_submitted = getattr(batch[-1], 'submitted_at', None)
+        if last_submitted is None:
+            break
+        next_after = str(last_submitted)[:19]
+        if next_after == page_after:
+            break  # safety: no progress
+        page_after = next_after
 
     logged = 0
+    reconciled = 0
     for symbol in sorted(bracket_closed):
-        if symbol not in sell_fills:
-            logging.warning(
-                f"{symbol}: bracket exit detected but no new sell fill found in Alpaca "
-                f"order history — skipping (may already be logged or check the Alpaca dashboard)"
-            )
-            continue
+        remaining = net_qty[symbol]
 
-        # Log all unrecorded sell fills for this symbol (handles multiple buys/bracket orders)
-        for fill in sell_fills[symbol]:
+        for fill in sell_fills.get(symbol, []):
             exit_price = round(float(fill.filled_avg_price), 4)
             exit_qty   = int(float(fill.filled_qty))
+            remaining -= exit_qty
 
             row = {
                 'timestamp':   datetime.now().isoformat(),
@@ -202,8 +225,34 @@ def sync_bracket_exits(conn, alpaca_held_symbols):
             )
             logged += 1
 
+        # Alpaca confirms position closed but fill price is unrecoverable —
+        # write a RECONCILE row to zero the books so this symbol stops recurring.
+        if remaining > 0:
+            row = {
+                'timestamp':   datetime.now().isoformat(),
+                'symbol':      symbol,
+                'side':        'SELL',
+                'qty':         remaining,
+                'entry_price': '',
+                'take_profit': '',
+                'stop_loss':   '',
+                'order_id':    'RECONCILE',
+                'confidence':  '',
+                'rsi':         '',
+                'momentum':    '',
+            }
+            with open(ORDER_LOG, 'a', newline='') as f:
+                csv.DictWriter(f, fieldnames=ORDER_FIELDS).writerow(row)
+            logging.info(
+                f"{symbol}: reconciled {remaining} phantom share(s) — "
+                f"Alpaca confirms position closed, fill price unavailable"
+            )
+            reconciled += 1
+
     if logged:
         logging.info(f"sync_bracket_exits: logged {logged} bracket exit(s)")
+    if reconciled:
+        logging.info(f"sync_bracket_exits: reconciled {reconciled} stale position(s)")
 
 
 def print_model_info(buy_predictor, sell_predictor=None):
@@ -447,7 +496,7 @@ def run_scan(symbols=None, min_confidence=0.6, min_sell_confidence=0.3, dry_run=
     for symbol in buy_candidates:
         try:
             df = trader.fetch_recent_data(symbol)
-            if df is None or len(df) < 50:
+            if df is None or len(df) < 100:
                 logging.warning(f"{symbol}: insufficient data, skipping")
                 continue
 
