@@ -134,6 +134,18 @@ A single 3-class model (BUY / HOLD / SELL) cannot tune entry and exit independen
 
 Training uses 4-hour bars exclusively. Each ticker is stored as a self-contained `.parquet` file under `saved_data/historical_4h/`, making it trivial to add tickers or refresh data independently.
 
+### Live Inference Data
+
+At inference time, each candidate ticker is fetched from Alpaca directly:
+
+| Property | Value |
+|----------|-------|
+| Lookback | 90 calendar days |
+| Timeframe | 4-hour bars (must match training) |
+| Minimum bars | 100 (feature builder requires window=30 + horizon=12 + 50 buffer = 92) |
+
+Tickers returning fewer than 100 bars (recently listed stocks, illiquid names with gaps) are skipped with an "insufficient data" warning rather than failing silently in the feature builder.
+
 ### Live Watchlist
 
 At runtime, the system scrapes **FinViz** for a fresh momentum watchlist using these filters:
@@ -337,6 +349,8 @@ Every order placed is appended to `paper_trade_log/orders.csv` with:
 - BUY confidence score
 - RSI and momentum strength at entry
 - Alpaca order ID (for reconciliation)
+
+At the start of each run, `sync_bracket_exits` reconciles positions closed by bracket SL/TP orders between runs. It paginates forward through Alpaca's closed order history (from the earliest outstanding BUY date, up to 20 pages of 500 orders each) to recover fill prices and log them as `SELL` rows. If a position is confirmed closed by Alpaca but the fill price is unrecoverable, a `RECONCILE` row (`order_id=RECONCILE`) is written to zero the net quantity and prevent the phantom position from recurring on future runs.
 
 Every signal scored (including non-triggers) is appended to `signals.csv` for post-hoc analysis.
 
