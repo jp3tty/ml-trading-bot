@@ -28,7 +28,7 @@ import pandas as pd
 from alpaca_trading import AlpacaConnection
 from ml.binary_predictor import BinaryBuyPredictor
 from ml.binary_sell_predictor import BinarySellPredictor
-from ml_trader import MLTrader, _calculate_atr
+from ml_trader import MLTrader, _calculate_atr, _get_indicators
 
 logging.basicConfig(
     level=logging.INFO,
@@ -442,10 +442,15 @@ def run_scan(symbols=None, min_confidence=0.6, min_sell_confidence=0.3, dry_run=
                     )
                 else:
                     try:
+                        open_orders = conn.api.list_orders(status='open', symbols=[symbol])
+                        for o in open_orders:
+                            conn.api.cancel_order(o.id)
                         conn.api.close_position(symbol)
                         action = 'SELL_ORDER'
+                        ind = _get_indicators(df)
                         log_order(symbol, 'SELL', position.qty, current_price,
-                                  None, None, None, prediction['probability'])
+                                  None, None, None, prediction['probability'],
+                                  rsi=ind['rsi'], momentum=ind['momentum'])
                         session_orders.append(('SELL', symbol))
                         logging.info(f"{symbol}: SELL order placed @ ${current_price:.2f}")
                     except Exception as e:
@@ -559,9 +564,11 @@ def run_scan(symbols=None, min_confidence=0.6, min_sell_confidence=0.3, dry_run=
                     stop_loss=stop_loss,
                 )
                 action = 'BUY_ORDER'
+                ind = _get_indicators(df)
                 log_order(symbol, 'BUY', qty, entry_price,
                           None, stop_loss, order,
-                          prediction['probability'])
+                          prediction['probability'],
+                          rsi=ind['rsi'], momentum=ind['momentum'])
                 session_orders.append(('BUY', symbol))
                 logging.info(
                     f"{symbol}: BUY ORDER  qty={qty}  "
