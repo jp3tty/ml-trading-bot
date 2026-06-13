@@ -41,6 +41,8 @@ A single 3-class model (BUY / HOLD / SELL) cannot tune entry and exit independen
 
 **2026-06-05 (current):** Reversed to precision-first (F-beta β=0.5, precision floor 50–55%). Rationale: 3-week paper trade produced 40% win rate (-$401.93 P&L). The SELL detector fired prematurely on some positions at large losses while not compensating for the volume of bad BUY entries. A 40% win rate with near-equal average win/loss cannot be profitable regardless of SELL behavior.
 
+**2026-06-13:** Aligned live exit parameters to training parameters. Analysis of the first 4 trading days under the precision model revealed a critical deployment mismatch: the BUY champion was trained with TP=+1.0% / SL=-0.8% triple-barrier labels, but live orders used ATR-based stops (≈-4 to -5%) and no take-profit ceiling. As a result the bracket stop-loss orders were routinely cancelled by `close_position()` when the SELL model fired, leaving positions exposed to -11% to -14% losses against a stated -4% stop. Additionally, `time_in_force="day"` on bracket orders meant overnight positions had no stop protection at all. Fixed: live SL=-0.8% fixed, TP=+1.0% fixed, `time_in_force="gtc"`.
+
 ---
 
 ## 2. Full Pipeline
@@ -292,24 +294,27 @@ Each run executes two independent passes:
 │     b. Build BUY features                          │
 │     c. If BUY probability ≥ confidence threshold:  │
 │        → Fetch live ask price                      │
-│        → Calculate ATR-based stop loss             │
-│        → Place bracket order on Alpaca             │
+│        → Calculate fixed SL (-0.8%) and TP (+1.0%) │
+│        → Place GTC bracket order on Alpaca          │
 │        → Log order with RSI, momentum, order ID    │
 └─────────────────────────────────────────────────────┘
 ```
+
+> **Exit priority:** The bracket TP/SL orders placed with Alpaca are the primary exit mechanism. The SELL model pass is a secondary early-exit signal. When `close_position()` is called by the SELL pass, Alpaca cancels any open bracket orders for that symbol before submitting the market sell — so the SELL model effectively overrides the bracket stop whenever it fires. The bracket stop acts as a true safety net only when the SELL model does not fire within the position's lifetime.
 
 ### Order Parameters
 
 | Parameter | Value |
 |-----------|-------|
-| Order type | Bracket (entry + stop loss) |
-| Stop loss | ATR × 2.0 below entry (14-period ATR) |
-| Take profit | Disabled by default (`USE_TAKE_PROFIT = False`) |
+| Order type | Bracket (entry + stop loss + take profit) |
+| Stop loss | -0.8% below live ask (matches BUY model training SL barrier) |
+| Take profit | +1.0% above live ask (matches BUY model training TP barrier) |
+| Time-in-force | GTC — stops and TP orders survive overnight |
 | Entry price | Live ask price at order time |
 | Max positions | 20 concurrent |
 | Position sizing | Equal-weight (Alpaca notional) |
 
-ATR-based stops adapt to each stock's volatility rather than using a fixed percentage — a stock with a wide daily range gets a wider stop; a low-volatility stock gets a tighter one.
+Stop and take-profit are fixed percentages deliberately matched to the BUY model's training labels. The champion was trained on a triple-barrier framework with TP=1.0% and SL=0.8%; using different values in live deployment breaks the model's calibration — the model is predicting the outcome of *that specific* reward:risk setup, not a wider or narrower one.
 
 ---
 
@@ -360,6 +365,9 @@ Every signal scored (including non-triggers) is appended to `signals.csv` for po
 
 **Triple-barrier labeling over fixed-horizon returns.**
 A simple "did price go up 1% in 5 days?" label ignores path and creates asymmetric risk. Triple-barrier labels tie directly to actual trade outcomes — a BUY label means the take-profit would have been hit before the stop-loss, so the model learns setups that produce real positive reward:risk, not just directional moves.
+
+**Live TP/SL must match training barriers exactly.**
+The BUY model is not predicting "will this stock go up." It is predicting "will the +1.0% take-profit barrier be hit before the -0.8% stop-loss barrier within 12 bars." Deploying with a different TP or SL invalidates the model's calibration entirely — the win rate and confidence scores only hold for the exact barrier setup the model was trained on. When we discovered live exits averaging -11% against a trained SL of -0.8%, the root cause was ATR-based stops (≈-4%) paired with no TP ceiling, meaning the SELL model was the real exit mechanism and bracket stops were being cancelled by `close_position()` before they could trigger. Fixed 2026-06-13.
 
 **Precision-weighted BUY (F-beta β=0.5), F1-first SELL.**
 These objectives reflect what matters at each stage. The BUY model must generate signals with a win rate above 50% to be profitable — paper trading at 40% win rate validated that recall-first was insufficient even with a fast SELL detector. F-beta (β=0.5) weights precision 4× more than recall. SELL is balanced between not missing exits and not creating excessive churn (F1).

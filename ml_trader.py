@@ -28,22 +28,9 @@ ORDER_FIELDS = [
 
 _ta = TechnicalAnalysis()
 
-ATR_PERIOD     = 14
-ATR_MULTIPLIER = 2.0
-
-USE_TAKE_PROFIT = False  # set True to re-enable TP ceiling exit
-TAKE_PROFIT_PCT = 0.20  # wide ceiling — only used when USE_TAKE_PROFIT is True
-
-
-def _calculate_atr(df, period=ATR_PERIOD):
-    high, low, close = df['high'], df['low'], df['close']
-    prev_close = close.shift(1)
-    tr = pd.concat(
-        [high - low, (high - prev_close).abs(), (low - prev_close).abs()],
-        axis=1,
-    ).max(axis=1)
-    atr = tr.rolling(period).mean().iloc[-1]
-    return float(atr) if pd.notna(atr) else None
+STOP_LOSS_PCT   = 0.008   # -0.8%: matches BUY model training (SL barrier = 0.8%)
+USE_TAKE_PROFIT = True    # +1.0%: matches BUY model training (TP barrier = 1.0%)
+TAKE_PROFIT_PCT = 0.01
 
 
 def _get_indicators(df):
@@ -376,16 +363,12 @@ class MLTrader:
                         f"{symbol}: live ask=${live_price:.2f}  prior close=${current_price:.2f}"
                     )
 
-                atr = _calculate_atr(df)
-                if atr is None:
-                    stop_loss = round(live_price * 0.97, 2)
-                    logging.warning(f"{symbol}: ATR unavailable — using 3% fallback stop")
-                else:
-                    stop_loss = round(live_price - ATR_MULTIPLIER * atr, 2)
-                    logging.info(
-                        f"{symbol}: ATR={atr:.2f}  stop=${stop_loss:.2f} ({ATR_MULTIPLIER}×ATR below live ask)"
-                    )
+                stop_loss   = round(live_price * (1 - STOP_LOSS_PCT), 2)
                 take_profit = round(live_price * (1 + TAKE_PROFIT_PCT), 2) if USE_TAKE_PROFIT else None
+                logging.info(
+                    f"{symbol}: stop=${stop_loss:.2f} (-{STOP_LOSS_PCT*100:.1f}%)  "
+                    f"tp=${take_profit:.2f} (+{TAKE_PROFIT_PCT*100:.1f}%)"
+                )
 
                 if dry_run:
                     tp_str = f"  tp=${take_profit:.2f}" if take_profit else ""
