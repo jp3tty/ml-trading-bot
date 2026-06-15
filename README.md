@@ -71,7 +71,7 @@ This produces meaningfully balanced labels and filters for setups with an explic
                │   Pass 2: BUY watchlist tickers │
                └────────────────┬────────────────┘
                                 │
-                       Alpaca orders (stop-loss only by default)
+                       Alpaca bracket orders (fixed SL -0.8%, TP +1.0%, GTC)
 ```
 
 ## Project Structure
@@ -251,9 +251,9 @@ Each run executes two passes:
 - Fetches momentum stocks from FinViz screener
 - Skips any ticker already held
 - Fetches **90 calendar days** of 4H bars per candidate (~120 bars); skips with "insufficient data" if fewer than 100 bars are returned (required by the feature builder: window=30 + horizon=12 + 50 buffer = 92 bars minimum)
-- Runs BUY detector; places order with ATR-based stop loss if signal fires above confidence threshold
-- Before placing each order, fetches the live ask price via `get_live_price()` (falls back to last trade price, then prior close) — the limit price and ATR stop are anchored to the current market, not yesterday's close
-- Take profit ceiling is disabled by default (`USE_TAKE_PROFIT = False` in `ml_trader.py`) — exits are via SELL signal or stop loss only; set to `True` to re-enable the 20% TP bracket
+- Runs BUY detector; places GTC bracket order if signal fires above confidence threshold
+- Before placing each order, fetches the live ask price via `get_live_price()` (falls back to last trade price, then prior close) — stop and take-profit are anchored to the current market ask
+- Stop loss fixed at **-0.8%** and take profit fixed at **+1.0%** — matching the BUY model's training barriers exactly. Bracket orders use `time_in_force="gtc"` so stops survive overnight.
 
 ## Models
 

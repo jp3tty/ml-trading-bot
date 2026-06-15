@@ -665,6 +665,7 @@ pip install scikit-learn xgboost pycatch22 pyarrow joblib pandas numpy
 - [x] Fixed paper_trade_validator.py bracket order parameters — was using hardcoded 1% SL / 2% TP; now uses ATR-based stop (2×ATR, 3% fallback) and TP disabled, matching ml_trader.py intent (2026-05-27)
 - [x] Cleaned orders.csv — removed 24 duplicate SELL rows created by the old sync function (2026-05-27)
 - [x] Monitor paper trade results and P&L via dashboard — 3-week analysis complete (2026-06-05); see `reports/2026-06-05_performance_report.md`
+- [x] Aligned live TP/SL to BUY model training parameters (2026-06-13) — three bugs caused exits to average -11% against a trained SL of -0.8%: (1) `time_in_force="day"` let bracket stops expire at close leaving overnight positions unprotected; (2) ATR-based stops (~4–5%) were 5× wider than the trained SL barrier (0.8%); (3) no take-profit ceiling vs trained TP of +1.0%. Fixed: GTC bracket orders with fixed SL=-0.8% and TP=+1.0%, matching training exactly.
 - [ ] Build backtesting framework
 - [ ] Implement one-lot-per-symbol rule (prevent pyramid buying across sessions)
 - [ ] Add time-of-day guard (no BUY orders after 3:45 PM ET)
