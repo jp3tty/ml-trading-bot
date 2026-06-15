@@ -28,7 +28,7 @@ import pandas as pd
 from alpaca_trading import AlpacaConnection
 from ml.binary_predictor import BinaryBuyPredictor
 from ml.binary_sell_predictor import BinarySellPredictor
-from ml_trader import MLTrader, _calculate_atr, _get_indicators
+from ml_trader import MLTrader, _get_indicators
 
 logging.basicConfig(
     level=logging.INFO,
@@ -547,33 +547,28 @@ def run_scan(symbols=None, min_confidence=0.6, min_sell_confidence=0.3, dry_run=
                 live_price = conn.get_live_price(symbol) or current_price
                 qty        = trader.calculate_position_size(symbol, live_price)
 
-                atr = _calculate_atr(df)
-                if atr is not None:
-                    stop_loss = round(live_price - 2.0 * atr, 2)
-                else:
-                    stop_loss = round(live_price * 0.97, 2)  # 3% fallback
-                # Safety floor: SL must never be tighter than 3% below entry
-                stop_loss = min(stop_loss, round(live_price * 0.97, 2))
-
                 entry_price = round(live_price, 2)
+                stop_loss   = round(live_price * (1 - 0.008), 2)   # -0.8%: matches BUY model training
+                take_profit = round(live_price * (1 + 0.010), 2)   # +1.0%: matches BUY model training
+
                 order = conn.place_bracket_order(
                     symbol=symbol,
                     qty=qty,
                     entry_price=entry_price,
-                    take_profit=None,   # exits via ML SELL or ATR stop only
+                    take_profit=take_profit,
                     stop_loss=stop_loss,
                 )
                 action = 'BUY_ORDER'
                 ind = _get_indicators(df)
                 log_order(symbol, 'BUY', qty, entry_price,
-                          None, stop_loss, order,
+                          take_profit, stop_loss, order,
                           prediction['probability'],
                           rsi=ind['rsi'], momentum=ind['momentum'])
                 session_orders.append(('BUY', symbol))
                 logging.info(
                     f"{symbol}: BUY ORDER  qty={qty}  "
                     f"prob={prediction['probability']:.4f}  @ ${entry_price}  "
-                    f"TP=None  SL=${stop_loss}"
+                    f"TP=${take_profit}  SL=${stop_loss}"
                 )
         elif not in_top5:
             logging.info(
