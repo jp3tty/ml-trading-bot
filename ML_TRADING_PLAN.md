@@ -666,6 +666,7 @@ pip install scikit-learn xgboost pycatch22 pyarrow joblib pandas numpy
 - [x] Cleaned orders.csv — removed 24 duplicate SELL rows created by the old sync function (2026-05-27)
 - [x] Monitor paper trade results and P&L via dashboard — 3-week analysis complete (2026-06-05); see `reports/2026-06-05_performance_report.md`
 - [x] Aligned live TP/SL to BUY model training parameters (2026-06-13) — three bugs caused exits to average -11% against a trained SL of -0.8%: (1) `time_in_force="day"` let bracket stops expire at close leaving overnight positions unprotected; (2) ATR-based stops (~4–5%) were 5× wider than the trained SL barrier (0.8%); (3) no take-profit ceiling vs trained TP of +1.0%. Fixed: GTC bracket orders with fixed SL=-0.8% and TP=+1.0%, matching training exactly.
+- [x] Added exit price logging to RECONCILE rows (2026-06-18) — RECONCILE exits previously left `entry_price` blank, making P&L calculation impossible for end-of-session closes. `sync_bracket_exits` now calls `get_live_price()` before writing a RECONCILE row and stores the current market price as an approximate exit price; falls back to blank if the fetch fails.
 - [ ] Build backtesting framework
 - [ ] Implement one-lot-per-symbol rule (prevent pyramid buying across sessions)
 - [ ] Add time-of-day guard (no BUY orders after 3:45 PM ET)

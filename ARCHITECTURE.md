@@ -355,7 +355,7 @@ Every order placed is appended to `paper_trade_log/orders.csv` with:
 - RSI and momentum strength at entry
 - Alpaca order ID (for reconciliation)
 
-At the start of each run, `sync_bracket_exits` reconciles positions closed by bracket SL/TP orders between runs. It paginates forward through Alpaca's closed order history (from the earliest outstanding BUY date, up to 20 pages of 500 orders each) to recover fill prices and log them as `SELL` rows. If a position is confirmed closed by Alpaca but the fill price is unrecoverable, a `RECONCILE` row (`order_id=RECONCILE`) is written to zero the net quantity and prevent the phantom position from recurring on future runs.
+At the start of each run, `sync_bracket_exits` reconciles positions closed by bracket SL/TP orders between runs. It paginates forward through Alpaca's closed order history (from the earliest outstanding BUY date, up to 20 pages of 500 orders each) to recover fill prices and log them as `SELL` rows. If a position is confirmed closed by Alpaca but the fill price is unrecoverable, a `RECONCILE` row (`order_id=RECONCILE`) is written to zero the net quantity and prevent the phantom position from recurring on future runs. Before writing the RECONCILE row, `get_live_price()` is called to capture the current market price as an approximate exit price in `entry_price`; this allows P&L estimation even when the exact fill is unavailable. If the price fetch fails, `entry_price` is left blank (pre-existing behavior).
 
 Every signal scored (including non-triggers) is appended to `signals.csv` for post-hoc analysis.
 

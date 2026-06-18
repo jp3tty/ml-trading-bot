@@ -227,13 +227,20 @@ def sync_bracket_exits(conn, alpaca_held_symbols):
 
         # Alpaca confirms position closed but fill price is unrecoverable —
         # write a RECONCILE row to zero the books so this symbol stops recurring.
+        # Best-effort: fetch current market price as a proxy for the exit price.
         if remaining > 0:
+            approx_price = None
+            try:
+                approx_price = conn.get_live_price(symbol)
+            except Exception:
+                pass
+
             row = {
                 'timestamp':   datetime.now().isoformat(),
                 'symbol':      symbol,
                 'side':        'SELL',
                 'qty':         remaining,
-                'entry_price': '',
+                'entry_price': round(approx_price, 4) if approx_price else '',
                 'take_profit': '',
                 'stop_loss':   '',
                 'order_id':    'RECONCILE',
@@ -243,9 +250,10 @@ def sync_bracket_exits(conn, alpaca_held_symbols):
             }
             with open(ORDER_LOG, 'a', newline='') as f:
                 csv.DictWriter(f, fieldnames=ORDER_FIELDS).writerow(row)
+            price_note = f"approx exit price ${approx_price:.4f}" if approx_price else "fill price unavailable"
             logging.info(
                 f"{symbol}: reconciled {remaining} phantom share(s) — "
-                f"Alpaca confirms position closed, fill price unavailable"
+                f"Alpaca confirms position closed, {price_note}"
             )
             reconciled += 1
 
