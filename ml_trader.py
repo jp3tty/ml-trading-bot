@@ -31,6 +31,7 @@ _ta = TechnicalAnalysis()
 STOP_LOSS_PCT   = 0.008   # -0.8%: matches BUY model training (SL barrier = 0.8%)
 USE_TAKE_PROFIT = True    # +1.0%: matches BUY model training (TP barrier = 1.0%)
 TAKE_PROFIT_PCT = 0.01
+MIN_SELL_PNL_PCT = 0.005  # +0.5%: ML SELL won't fire below this gain (filters noise)
 
 
 def _get_indicators(df):
@@ -253,12 +254,20 @@ class MLTrader:
                 current_price = float(df['close'].iloc[-1])
                 should_sell, confidence = self.should_sell(df)
 
+                pnl_pct = float(position.unrealized_plpc)
                 logging.info(
                     f"{symbol}: SELL={'YES' if should_sell else 'NO'} "
                     f"(prob={confidence:.3f}) @ ${current_price:.2f}  "
                     f"[entry=${float(position.avg_entry_price):.2f}  "
-                    f"P&L={float(position.unrealized_plpc)*100:+.1f}%]"
+                    f"P&L={pnl_pct*100:+.1f}%]"
                 )
+
+                if should_sell and pnl_pct < MIN_SELL_PNL_PCT:
+                    logging.info(
+                        f"{symbol}: SELL gated — P&L {pnl_pct*100:+.2f}% "
+                        f"below minimum +{MIN_SELL_PNL_PCT*100:.1f}%"
+                    )
+                    should_sell = False
 
                 if should_sell:
                     if dry_run:

@@ -101,6 +101,7 @@ A single 3-class model (BUY / HOLD / SELL) cannot tune entry and exit independen
 │  Pass 1 — SELL                                                          │
 │  ├── Fetch all open Alpaca positions                                    │
 │  ├── Run SELL detector on each held ticker                              │
+│  ├── Gate: skip if unrealized P&L < +0.5% (noise floor)               │
 │  └── Close position if signal fires above confidence floor              │
 │                                                                         │
 │  Pass 2 — BUY                                                           │
@@ -275,7 +276,8 @@ Each run executes two independent passes:
 │  2. For each held ticker:                           │
 │     a. Pull latest 4h bars                         │
 │     b. Build SELL features                         │
-│     c. If SELL probability ≥ confidence floor:     │
+│     c. If unrealized P&L < +0.5%: skip (gated)    │
+│     d. If SELL probability ≥ confidence floor:     │
 │        → Close position at market                  │
 │                                                     │
 │  Note: SELL pass is independent of the watchlist.  │
@@ -313,6 +315,7 @@ Each run executes two independent passes:
 | Entry price | Live ask price at order time |
 | Max positions | 20 concurrent |
 | Position sizing | Equal-weight (Alpaca notional) |
+| ML SELL gate | Unrealized P&L must be ≥ +0.5% for SELL signal to fire |
 
 Stop and take-profit are fixed percentages deliberately matched to the BUY model's training labels. The champion was trained on a triple-barrier framework with TP=1.0% and SL=0.8%; using different values in live deployment breaks the model's calibration — the model is predicting the outcome of *that specific* reward:risk setup, not a wider or narrower one.
 
@@ -377,6 +380,9 @@ Each model is promoted to production as a `.pkl` file, independent of the other.
 
 **4-hour bars for training, FinViz for candidate selection.**
 4h bars strike a balance between intraday noise and the multi-day momentum that FinViz screeners capture. The screener narrows the universe to high-momentum, high-volume candidates at runtime, so the model only needs to make a binary decision on pre-filtered setups rather than scanning the entire market.
+
+**SELL gated by minimum P&L (+0.5%).**
+The SELL model is intentionally tuned for high sensitivity (recall-first, threshold=0.040), which means it fires readily — including on positions that have moved against entry. The stop-loss bracket handles downside exits; the ML SELL model should only accelerate exits from profitable positions. A `MIN_SELL_PNL_PCT = 0.005` gate in `ml_trader.py` suppresses SELL signals when unrealized P&L is below +0.5%, filtering out noise-driven exits without retraining the model. The +0.5% floor is half the take-profit target (+1.0%), confirming real upward movement before an early exit is allowed.
 
 **Two-pass execution (SELL before BUY).**
 Running SELL before BUY ensures losing positions are cut before new capital is deployed. It also decouples exit logic from entry logic — the SELL pass operates on Alpaca's actual held positions, not the FinViz watchlist, so a held ticker is never missed even if it drops out of the momentum screener.
