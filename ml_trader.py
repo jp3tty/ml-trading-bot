@@ -254,11 +254,12 @@ class MLTrader:
                 current_price = float(df['close'].iloc[-1])
                 should_sell, confidence = self.should_sell(df)
 
-                pnl_pct = float(position.unrealized_plpc)
+                avg_entry = float(position.avg_entry_price)
+                pnl_pct = (current_price - avg_entry) / avg_entry
                 logging.info(
                     f"{symbol}: SELL={'YES' if should_sell else 'NO'} "
                     f"(prob={confidence:.3f}) @ ${current_price:.2f}  "
-                    f"[entry=${float(position.avg_entry_price):.2f}  "
+                    f"[entry=${avg_entry:.2f}  "
                     f"P&L={pnl_pct*100:+.1f}%]"
                 )
 

@@ -244,7 +244,8 @@ Each run executes two passes:
 **Pass 1 — SELL** (held positions from Alpaca):
 - Fetches all open positions once via `get_held_positions()`
 - Runs SELL detector on every held ticker
-- Closes position if SELL signal fires
+- Gate: SELL signal is suppressed if `(current_price − avg_entry_price) / avg_entry_price < +0.5%` — P&L is computed directly from `position.avg_entry_price` rather than `position.unrealized_plpc` to avoid paper-account pricing discrepancies
+- Closes position if SELL signal fires above confidence floor
 - Independent of the FinViz watchlist — held tickers are never missed
 
 **Pass 2 — BUY** (FinViz watchlist):
