@@ -102,12 +102,17 @@ def sync_bracket_exits(conn, alpaca_held_symbols):
 
     Compares open positions in orders.csv against Alpaca's live positions.
     Any symbol open in the log but absent from Alpaca was closed by a bracket
-    order — we fetch the actual fill price from Alpaca order history and write
-    a BRACKET_EXIT sell row so the log stays accurate.
+    order — we fetch the actual fill price and write a BRACKET_EXIT sell row.
 
-    Paginates forward (asc) from the earliest relevant BUY so old fills beyond
-    a single 500-order window are not missed.  Any symbol still unresolved after
-    exhausting Alpaca history gets a RECONCILE row to zero the books.
+    Strategy 1 (primary): query the parent bracket order by ID and inspect its
+    legs.  Alpaca only exposes bracket child orders through the parent; they do
+    not reliably appear as separate entries in list_orders.
+
+    Strategy 2 (fallback): paginate list_orders for any symbol not resolved by
+    the legs lookup.
+
+    Any symbol still unresolved after both strategies gets a RECONCILE row with
+    an approximate live price so the log stays in sync.
     """
     if not os.path.exists(ORDER_LOG) or os.path.getsize(ORDER_LOG) == 0:
         return
@@ -121,9 +126,10 @@ def sync_bracket_exits(conn, alpaca_held_symbols):
         if r.get('order_id') and r['order_id'] not in ('N/A', '', 'RECONCILE')
     }
 
-    # Net open qty per symbol; track the last BUY timestamp for each symbol
+    # Net open qty per symbol; track the last BUY timestamp and order ID
     net_qty = defaultdict(int)
     last_buy_ts = {}
+    last_buy_order_id = {}
     for r in rows:
         try:
             qty = int(r.get('qty', 0) or 0)
@@ -132,6 +138,9 @@ def sync_bracket_exits(conn, alpaca_held_symbols):
         if r['side'] == 'BUY':
             net_qty[r['symbol']] += qty
             last_buy_ts[r['symbol']] = r['timestamp'][:19]
+            oid = r.get('order_id', '')
+            if oid and oid not in ('N/A', '', 'RECONCILE'):
+                last_buy_order_id[r['symbol']] = oid
         elif r['side'] == 'SELL':
             net_qty[r['symbol']] -= qty
 
@@ -147,50 +156,84 @@ def sync_bracket_exits(conn, alpaca_held_symbols):
         f"{sorted(bracket_closed)}"
     )
 
-    # Paginate forward from the earliest last-BUY date among unresolved symbols.
-    # direction='asc' + after=<timestamp> ensures old fills aren't cut off by a
-    # fixed limit=500 window the way direction='desc' would.
-    page_after = min(
-        last_buy_ts.get(sym, rows[0]['timestamp'][:19]) for sym in bracket_closed
-    )
-
     sell_fills = defaultdict(list)
-    MAX_PAGES = 20
-    for _ in range(MAX_PAGES):
+
+    # ------------------------------------------------------------------
+    # Strategy 1: inspect parent bracket order legs directly.
+    # Bracket child (SL/TP) orders are only reliably accessible via the
+    # parent; list_orders does not return them as top-level entries.
+    # ------------------------------------------------------------------
+    for symbol in sorted(bracket_closed):
+        parent_id = last_buy_order_id.get(symbol)
+        if not parent_id:
+            continue
         try:
-            batch = conn.api.list_orders(
-                status='closed',
-                limit=500,
-                direction='asc',
-                after=page_after,
-            )
+            parent = conn.api.get_order(parent_id)
+            legs = getattr(parent, 'legs', None) or []
+            for leg in legs:
+                if (
+                    getattr(leg, 'side', '') == 'sell'
+                    and getattr(leg, 'status', '') == 'filled'
+                    and getattr(leg, 'filled_avg_price', None)
+                    and float(getattr(leg, 'filled_avg_price', 0) or 0) > 0
+                    and leg.id not in existing_order_ids
+                ):
+                    sell_fills[symbol].append(leg)
+                    logging.info(
+                        f"{symbol}: found bracket exit via parent legs — "
+                        f"leg_id={leg.id}  price={leg.filled_avg_price}"
+                    )
+                    break
         except Exception as e:
-            logging.error(f"sync_bracket_exits: could not fetch order history: {e}")
-            break
+            logging.warning(
+                f"sync_bracket_exits: could not fetch parent order {parent_id} "
+                f"for {symbol}: {e}"
+            )
 
-        if not batch:
-            break
+    # ------------------------------------------------------------------
+    # Strategy 2: paginate list_orders for symbols not resolved above.
+    # ------------------------------------------------------------------
+    still_unfound = bracket_closed - set(sell_fills)
+    if still_unfound:
+        page_after = min(
+            last_buy_ts.get(sym, rows[0]['timestamp'][:19]) for sym in still_unfound
+        )
+        MAX_PAGES = 20
+        for _ in range(MAX_PAGES):
+            try:
+                batch = conn.api.list_orders(
+                    status='closed',
+                    limit=500,
+                    direction='asc',
+                    after=page_after,
+                )
+            except Exception as e:
+                logging.error(f"sync_bracket_exits: could not fetch order history: {e}")
+                break
 
-        for o in batch:
-            if (
-                o.side == 'sell'
-                and o.filled_avg_price
-                and float(getattr(o, 'filled_qty', 0) or 0) > 0
-                and o.id not in existing_order_ids
-                and o.symbol in bracket_closed
-            ):
-                sell_fills[o.symbol].append(o)
+            if not batch:
+                break
 
-        if len(batch) < 500:
-            break  # reached end of order history
+            for o in batch:
+                if (
+                    o.side == 'sell'
+                    and o.filled_avg_price
+                    and float(getattr(o, 'filled_qty', 0) or 0) > 0
+                    and o.id not in existing_order_ids
+                    and o.symbol in still_unfound
+                ):
+                    sell_fills[o.symbol].append(o)
 
-        last_submitted = getattr(batch[-1], 'submitted_at', None)
-        if last_submitted is None:
-            break
-        next_after = str(last_submitted)[:19]
-        if next_after == page_after:
-            break  # safety: no progress
-        page_after = next_after
+            if len(batch) < 500:
+                break
+
+            last_submitted = getattr(batch[-1], 'submitted_at', None)
+            if last_submitted is None:
+                break
+            next_after = str(last_submitted)[:19]
+            if next_after == page_after:
+                break
+            page_after = next_after
 
     logged = 0
     reconciled = 0
@@ -199,7 +242,7 @@ def sync_bracket_exits(conn, alpaca_held_symbols):
 
         for fill in sell_fills.get(symbol, []):
             exit_price = round(float(fill.filled_avg_price), 4)
-            exit_qty   = int(float(fill.filled_qty))
+            exit_qty   = int(float(getattr(fill, 'filled_qty', remaining) or remaining))
             remaining -= exit_qty
 
             row = {
@@ -225,9 +268,7 @@ def sync_bracket_exits(conn, alpaca_held_symbols):
             )
             logged += 1
 
-        # Alpaca confirms position closed but fill price is unrecoverable —
-        # write a RECONCILE row to zero the books so this symbol stops recurring.
-        # Best-effort: fetch current market price as a proxy for the exit price.
+        # Both strategies exhausted — write RECONCILE with approximate live price.
         if remaining > 0:
             approx_price = None
             try:
