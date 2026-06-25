@@ -38,6 +38,9 @@ logging.basicConfig(
 SIGNAL_LOG    = "paper_trade_log/signals.csv"
 ORDER_LOG     = "paper_trade_log/orders.csv"
 MAX_POSITIONS = 20
+MIN_SELL_PNL_PCT = 0.005  # ML SELL won't fire below +0.5% gain — mirrors ml_trader.py
+STOP_LOSS_PCT    = 0.020  # -2.0%: wider than training labels to survive intraday noise on 4h bars
+TAKE_PROFIT_PCT  = 0.025  # +2.5%: maintains 1.25× R/R ratio with wider stop
 
 # 'side' = BUY or SELL; 'signal_fired' = whether the detector triggered
 SIGNAL_FIELDS = [
@@ -468,6 +471,8 @@ def run_scan(symbols=None, min_confidence=0.6, min_sell_confidence=0.3, dry_run=
                 continue
 
             current_price = float(df['close'].iloc[-1])
+            avg_entry     = float(position.avg_entry_price)
+            pnl_pct       = (current_price - avg_entry) / avg_entry
 
             if sell_predictor is None:
                 logging.info(f"{symbol}: SELL detector not loaded — skipping")
@@ -481,13 +486,19 @@ def run_scan(symbols=None, min_confidence=0.6, min_sell_confidence=0.3, dry_run=
             action = 'NO_ACTION'
 
             if prediction['is_sell'] and prediction['probability'] >= min_sell_confidence:
-                if dry_run:
+                if pnl_pct < MIN_SELL_PNL_PCT:
+                    action = 'PNL_GATE'
+                    logging.info(
+                        f"{symbol}: SELL gated — P&L {pnl_pct*100:+.2f}% "
+                        f"below minimum +{MIN_SELL_PNL_PCT*100:.1f}%  "
+                        f"(prob={prediction['probability']:.4f}  entry=${avg_entry:.2f})"
+                    )
+                elif dry_run:
                     action = 'DRY_RUN_SELL'
                     logging.info(
                         f"{symbol}: [DRY RUN] SELL  prob={prediction['probability']:.4f}  "
                         f"@ ${current_price:.2f}  "
-                        f"[entry=${float(position.avg_entry_price):.2f}  "
-                        f"P&L={float(position.unrealized_plpc)*100:+.1f}%]"
+                        f"[entry=${avg_entry:.2f}  P&L={pnl_pct*100:+.2f}%]"
                     )
                 else:
                     try:
@@ -501,7 +512,10 @@ def run_scan(symbols=None, min_confidence=0.6, min_sell_confidence=0.3, dry_run=
                                   None, None, None, prediction['probability'],
                                   rsi=ind['rsi'], momentum=ind['momentum'])
                         session_orders.append(('SELL', symbol))
-                        logging.info(f"{symbol}: SELL order placed @ ${current_price:.2f}")
+                        logging.info(
+                            f"{symbol}: SELL order placed @ ${current_price:.2f}  "
+                            f"[entry=${avg_entry:.2f}  P&L={pnl_pct*100:+.2f}%]"
+                        )
                     except Exception as e:
                         logging.error(f"{symbol}: error closing position: {e}")
             else:
@@ -509,7 +523,7 @@ def run_scan(symbols=None, min_confidence=0.6, min_sell_confidence=0.3, dry_run=
                     f"{symbol}: hold  prob={prediction['probability']:.4f}  "
                     f"(model_threshold={prediction['threshold']:.4f}  "
                     f"sell_confidence_floor={min_sell_confidence:.4f})  "
-                    f"P&L={float(position.unrealized_plpc)*100:+.1f}%"
+                    f"entry=${avg_entry:.2f}  P&L={pnl_pct*100:+.2f}%"
                 )
 
             log_signal(symbol, 'SELL', prediction, action, current_price)
@@ -597,8 +611,8 @@ def run_scan(symbols=None, min_confidence=0.6, min_sell_confidence=0.3, dry_run=
                 qty        = trader.calculate_position_size(symbol, live_price)
 
                 entry_price = round(live_price, 2)
-                stop_loss   = round(live_price * (1 - 0.008), 2)   # -0.8%: matches BUY model training
-                take_profit = round(live_price * (1 + 0.010), 2)   # +1.0%: matches BUY model training
+                stop_loss   = round(live_price * (1 - STOP_LOSS_PCT), 2)
+                take_profit = round(live_price * (1 + TAKE_PROFIT_PCT), 2)
 
                 order = conn.place_bracket_order(
                     symbol=symbol,

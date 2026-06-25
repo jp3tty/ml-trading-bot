@@ -2,12 +2,13 @@
 Binary Hyperparameter Search for SELL Signal Detection
 
 Grid search to find optimal parameters for the binary SELL detector.
-Unlike the BUY detector (which optimises for precision), the SELL detector
-optimises for RECALL — we want to catch declines quickly, accepting more
-false alarms in exchange for rarely missing an exit opportunity.
+The SELL detector optimises for balanced F1 — we want a genuine signal
+that declines are coming, not a trigger-happy model that fires on every
+position.  Previous recall-maximising regime produced 99.9% recall /
+41% precision, meaning the model always fired regardless of conditions.
 
 Champion selection:
-    recall >= min_recall AND precision >= 0.4  →  rank by F1
+    precision >= 0.5 AND recall >= 0.2  →  rank by F1
 """
 
 import numpy as np
@@ -44,9 +45,9 @@ class SellHyperparameterSearch:
 
     Key differences from BuyHyperparameterSearch:
       - Uses BinarySellFeatureBuilder (inverted labels)
-      - find_optimal_threshold enforces a minimum RECALL (not precision)
-      - Champion selected by F1 with recall >= min_recall floor
-      - scale_pos_weight / class_weight tuned for sensitivity
+      - find_optimal_threshold enforces a minimum PRECISION (not recall)
+      - Champion selected by F1 with precision >= min_precision floor
+      - Balanced class_weight to avoid always-SELL bias
     """
 
     def __init__(self, data_dir="saved_data/historical_4h",
@@ -63,24 +64,24 @@ class SellHyperparameterSearch:
         """Full hyperparameter search space."""
         return {
             'window_size':    [10, 15, 20, 30],
-            'horizon':        [2, 3, 5],           # Shorter — fast exits
-            'sell_threshold': [0.01, 0.015, 0.02, 0.025],
+            'horizon':        [6, 9, 12],          # Match BUY model (12 bars ≈ 3 trading days)
+            'sell_threshold': [0.015, 0.02, 0.025, 0.03],  # Meaningful declines only
             'classifier':     ['random_forest', 'xgboost'],
             'n_estimators':   [100, 200],
             'max_depth':      [5, 10, None],
-            'min_recall':     [0.3, 0.4],
+            'min_precision':  [0.45, 0.5],
         }
 
     def define_quick_search_space(self):
         """Smaller search space for faster iteration."""
         return {
             'window_size':    [15, 20, 30],
-            'horizon':        [2, 3, 5],
-            'sell_threshold': [0.005, 0.01, 0.015, 0.02],
+            'horizon':        [6, 9, 12],
+            'sell_threshold': [0.015, 0.02, 0.025, 0.03],
             'classifier':     ['random_forest', 'xgboost'],
             'n_estimators':   [100, 200],
             'max_depth':      [6, 8, 10],
-            'min_recall':     [0.3, 0.4],
+            'min_precision':  [0.45, 0.5],
         }
 
     def load_data(self, window_size, horizon, sell_threshold, max_files=None):
@@ -128,14 +129,13 @@ class SellHyperparameterSearch:
         return X, y
 
     def get_classifier(self, classifier_type, n_estimators, max_depth):
-        """Get classifier tuned for recall/sensitivity."""
+        """Get classifier with balanced class weights for precision/recall trade-off."""
         if classifier_type == 'random_forest':
             return RandomForestClassifier(
                 n_estimators=n_estimators,
                 max_depth=max_depth,
                 min_samples_leaf=5,
-                # Heavier weight on SELL class — catch more declines
-                class_weight={0: 1, 1: 3},
+                class_weight='balanced',
                 random_state=42,
                 n_jobs=-1
             )
@@ -146,34 +146,36 @@ class SellHyperparameterSearch:
                 n_estimators=n_estimators,
                 max_depth=max_depth if max_depth else 6,
                 learning_rate=0.1,
-                # Higher scale_pos_weight → more SELL predictions
-                scale_pos_weight=4,
+                scale_pos_weight=1,
                 random_state=42,
                 n_jobs=-1,
                 eval_metric='aucpr'
             )
 
-    def find_optimal_threshold(self, y_true, y_proba, min_recall):
+    def find_optimal_threshold(self, y_true, y_proba, min_precision):
         """
-        Find threshold maximising F1 subject to recall >= min_recall.
+        Find threshold maximising F1 subject to precision >= min_precision.
 
-        For the SELL detector we lower the threshold until we hit our recall
-        target, then pick the point with the best F1 among qualifying options.
+        We raise the threshold until we hit the precision floor, then pick
+        the point with the best F1 among qualifying options.  This prevents
+        the model from always firing (high recall / low precision).
         """
         from sklearn.metrics import precision_recall_curve
 
         precisions, recalls, thresholds = precision_recall_curve(y_true, y_proba)
 
-        # Valid thresholds meeting recall requirement (and at least 40% precision)
-        valid_idx = (recalls[:-1] >= min_recall) & (precisions[:-1] >= 0.4)
+        # Valid thresholds: meet precision floor and at least 20% recall
+        valid_idx = (precisions[:-1] >= min_precision) & (recalls[:-1] >= 0.2)
 
         if not any(valid_idx):
-            # Fall back: enforce only recall floor, drop precision requirement
-            valid_idx = recalls[:-1] >= min_recall
+            # Fall back: enforce only precision floor
+            valid_idx = precisions[:-1] >= min_precision
 
         if not any(valid_idx):
-            # Last resort: return threshold with highest recall
-            return thresholds[np.argmax(recalls[:-1])], False
+            # Last resort: return threshold with best F1 overall
+            f1_all = (2 * precisions[:-1] * recalls[:-1] /
+                      (precisions[:-1] + recalls[:-1] + 1e-10))
+            return thresholds[np.argmax(f1_all)], False
 
         f1_scores = (2 * precisions[:-1] * recalls[:-1] /
                      (precisions[:-1] + recalls[:-1] + 1e-10))
@@ -226,8 +228,8 @@ class SellHyperparameterSearch:
 
             y_proba = model.predict_proba(X_test)[:, 1]
 
-            threshold, met_recall = self.find_optimal_threshold(
-                y_test, y_proba, params['min_recall']
+            threshold, met_precision = self.find_optimal_threshold(
+                y_test, y_proba, params['min_precision']
             )
 
             y_pred = (y_proba >= threshold).astype(int)
@@ -250,19 +252,19 @@ class SellHyperparameterSearch:
 
             result = {
                 **params,
-                'threshold':        threshold,
-                'met_recall_req':   met_recall,
-                'accuracy':         accuracy,
-                'precision':        precision,
-                'recall':           recall,
-                'f1':               f1,
-                'roc_auc':          roc_auc,
-                'pr_auc':           pr_auc,
-                'true_positives':   true_positives,
-                'false_positives':  false_positives,
-                'total_samples':    len(X),
-                'sell_samples':     sell_count,
-                'sell_pct':         sell_pct,
+                'threshold':          threshold,
+                'met_precision_req':  met_precision,
+                'accuracy':           accuracy,
+                'precision':          precision,
+                'recall':             recall,
+                'f1':                 f1,
+                'roc_auc':            roc_auc,
+                'pr_auc':             pr_auc,
+                'true_positives':     true_positives,
+                'false_positives':    false_positives,
+                'total_samples':      len(X),
+                'sell_samples':       sell_count,
+                'sell_pct':           sell_pct,
             }
 
             logging.info(
@@ -270,8 +272,8 @@ class SellHyperparameterSearch:
                 f"F1: {f1:.3f}"
             )
 
-            # Champion: recall >= 0.2 and precision >= 0.4, ranked by F1
-            if recall >= 0.3 and precision >= 0.4:
+            # Champion: precision >= 0.5 and recall >= 0.2, ranked by F1
+            if precision >= 0.5 and recall >= 0.2:
                 score = f1
                 if score > self.champion_score:
                     self.champion_score = score
@@ -375,7 +377,7 @@ class SellHyperparameterSearch:
                     f"Testing: window={params['window_size']}, horizon={params['horizon']}, "
                     f"sell_thresh={params['sell_threshold']}, clf={params['classifier']}, "
                     f"n_est={params['n_estimators']}, depth={params['max_depth']}, "
-                    f"min_recall={params['min_recall']}"
+                    f"min_precision={params['min_precision']}"
                 )
 
                 try:
@@ -387,8 +389,8 @@ class SellHyperparameterSearch:
                     model.fit(X_train, y_train)
                     y_proba = model.predict_proba(X_test)[:, 1]
 
-                    threshold, met_recall = self.find_optimal_threshold(
-                        y_test, y_proba, params['min_recall']
+                    threshold, met_precision = self.find_optimal_threshold(
+                        y_test, y_proba, params['min_precision']
                     )
                     y_pred = (y_proba >= threshold).astype(int)
 
@@ -415,26 +417,26 @@ class SellHyperparameterSearch:
 
                     result = {
                         **params,
-                        'threshold':        threshold,
-                        'met_recall_req':   met_recall,
-                        'accuracy':         accuracy,
-                        'precision':        precision,
-                        'recall':           recall,
-                        'f1':               f1,
-                        'roc_auc':          roc_auc,
-                        'pr_auc':           pr_auc,
-                        'true_positives':   true_positives,
-                        'false_positives':  false_positives,
-                        'total_samples':    len(X),
-                        'sell_samples':     sell_count,
-                        'sell_pct':         sell_count / len(y) * 100,
+                        'threshold':          threshold,
+                        'met_precision_req':  met_precision,
+                        'accuracy':           accuracy,
+                        'precision':          precision,
+                        'recall':             recall,
+                        'f1':                 f1,
+                        'roc_auc':            roc_auc,
+                        'pr_auc':             pr_auc,
+                        'true_positives':     true_positives,
+                        'false_positives':    false_positives,
+                        'total_samples':      len(X),
+                        'sell_samples':       sell_count,
+                        'sell_pct':           sell_count / len(y) * 100,
                     }
 
                     logging.info(
                         f"  Precision: {precision:.3f}, Recall: {recall:.3f}, F1: {f1:.3f}"
                     )
 
-                    if recall >= 0.3 and precision >= 0.4:
+                    if precision >= 0.5 and recall >= 0.2:
                         score = f1
                         if score > self.champion_score:
                             self.champion_score = score

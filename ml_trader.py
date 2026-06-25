@@ -28,9 +28,9 @@ ORDER_FIELDS = [
 
 _ta = TechnicalAnalysis()
 
-STOP_LOSS_PCT   = 0.008   # -0.8%: matches BUY model training (SL barrier = 0.8%)
-USE_TAKE_PROFIT = True    # +1.0%: matches BUY model training (TP barrier = 1.0%)
-TAKE_PROFIT_PCT = 0.01
+STOP_LOSS_PCT   = 0.020   # -2.0%: wider than training labels to survive intraday noise on 4h bars
+USE_TAKE_PROFIT = True    # +2.5%: maintains 1.25× R/R ratio with wider stop
+TAKE_PROFIT_PCT = 0.025
 MIN_SELL_PNL_PCT = 0.005  # +0.5%: ML SELL won't fire below this gain (filters noise)
 
 
