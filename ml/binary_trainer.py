@@ -18,7 +18,7 @@ from sklearn.metrics import (
     average_precision_score
 )
 from sklearn.ensemble import RandomForestClassifier
-from sklearn.liner_model import LogisticRegression
+from sklearn.linear_model import LogisticRegression
 from sklearn.preprocessing import StandardScaler
 
 # Optional XGBoost
