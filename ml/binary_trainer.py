@@ -114,9 +114,9 @@ class BinaryModelTrainer:
         return X, y
 
     def get_classifier(self, classifier_type, class_weight='balanced'):
-        f"""
+        """
         Get classifier instance
-        
+
         Args:
             classifier_type: 'random_forest', 'xgboost', or 'logistic'
             class_weight: 'balanced' or dict like {0: 1, 1: 3}
