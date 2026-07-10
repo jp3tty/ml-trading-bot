@@ -67,16 +67,15 @@ class BinaryHyperparameterSearch:
         }
 
     def define_quick_search_space(self):
-        """Focused search space (~240 combos, ~3 hrs with 200 files).
-        Expands horizon to [6, 9, 12] since the previous champion was found
-        with daily-bar inference (timeframe mismatch now fixed — re-search needed).
+        """Focused search space targeting tighter BUY labels to reduce ~25% BUY rate.
+        Raises take_profit to 2-4% on 4h bars to cut label rate to ~5-10%.
         Optimizes for F-beta (β=0.5) — precision-weighted to target 55%+ live win rate.
         """
         return {
             'window_size':   [21, 30],
             'horizon':       [6, 9, 12],
-            'take_profit':   [0.008, 0.010, 0.015],
-            'stop_loss':     [0.005, 0.008],
+            'take_profit':   [0.020, 0.030, 0.040],
+            'stop_loss':     [0.010, 0.015],
             'classifier':    ['random_forest', 'xgboost'],
             'n_estimators':  [200],
             'max_depth':     [8, 12],
