@@ -175,7 +175,7 @@ class BinaryModelTrainer:
             X, y, test_size=test_size, shuffle=False
         )
 
-        logging.info(f"Train: {len()} samples ({sum(y_train)} BUY)")
+        logging.info(f"Train: {len(X_train)} samples ({sum(y_train)} BUY)")
         logging.info(f"Test: {len(X_test)} samples ({sum(y_test)} BUY)")
 
         # Scale features
