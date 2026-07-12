@@ -273,8 +273,10 @@ class BinaryHyperparameterSearch:
             }
             
             logging.info(f"  Precision: {precision:.3f}, Recall: {recall:.3f}, "
-                        f"F1: {f1:.3f}, Win Rate: {win_rate:.1%}")
-            
+                        f"F1: {f1:.3f}, Win Rate: {win_rate:.1%}, "
+                        f"ROC-AUC: {roc_auc:.3f}, PR-AUC: {pr_auc:.3f}, "
+                        f"TP: {true_positives}, FP: {false_positives}")
+
             # Champion ranked by F-beta (β=0.5) — precision-weighted objective
             if precision >= params.get('min_precision', 0.50):
                 beta2 = 0.25
@@ -283,16 +285,23 @@ class BinaryHyperparameterSearch:
                 if score > self.champion_score:
                     self.champion_score = score
                     self.champion = {
-                        'params': params,
-                        'model': model,
-                        'scaler': scaler,
-                        'threshold': threshold,
-                        'precision': precision,
-                        'recall': recall,
-                        'f1': f1,
-                        'win_rate': win_rate
+                        'params':          params,
+                        'model':           model,
+                        'scaler':          scaler,
+                        'threshold':       threshold,
+                        'precision':       precision,
+                        'recall':          recall,
+                        'f1':              f1,
+                        'win_rate':        win_rate,
+                        'roc_auc':         roc_auc,
+                        'pr_auc':          pr_auc,
+                        'true_positives':  true_positives,
+                        'false_positives': false_positives,
+                        'buy_samples':     buy_count,
                     }
-                    logging.info(f"  *** NEW CHAMPION! Precision: {precision:.1%}, Recall: {recall:.1%}, F0.5: {score:.3f} ***")
+                    logging.info(f"  *** NEW CHAMPION! Precision: {precision:.1%}, Recall: {recall:.1%}, "
+                                 f"F0.5: {score:.3f}, ROC-AUC: {roc_auc:.3f}, PR-AUC: {pr_auc:.3f}, "
+                                 f"TP: {true_positives}, FP: {false_positives} ***")
 
             return result
             
@@ -341,11 +350,16 @@ class BinaryHyperparameterSearch:
                 'params': {k: (int(v) if isinstance(v, np.integer) else
                                float(v) if isinstance(v, np.floating) else v)
                            for k, v in self.champion['params'].items()},
-                'threshold': float(self.champion['threshold']),
-                'precision': float(self.champion['precision']),
-                'recall':    float(self.champion['recall']),
-                'f1':        float(self.champion['f1']),
-                'win_rate':  float(self.champion['win_rate'])
+                'threshold':       float(self.champion['threshold']),
+                'precision':       float(self.champion['precision']),
+                'recall':          float(self.champion['recall']),
+                'f1':              float(self.champion['f1']),
+                'win_rate':        float(self.champion['win_rate']),
+                'roc_auc':         float(self.champion.get('roc_auc', 0)),
+                'pr_auc':          float(self.champion.get('pr_auc', 0)),
+                'true_positives':  int(self.champion.get('true_positives', 0)),
+                'false_positives': int(self.champion.get('false_positives', 0)),
+                'buy_samples':     int(self.champion.get('buy_samples', 0)),
             }, f, indent=2)
 
     def run_search(self, quick=False, max_files=None):
@@ -444,7 +458,9 @@ class BinaryHyperparameterSearch:
                     }
 
                     logging.info(f"  Precision: {precision:.3f}, Recall: {recall:.3f}, "
-                                 f"F1: {f1:.3f}, Win Rate: {win_rate:.1%}")
+                                 f"F1: {f1:.3f}, Win Rate: {win_rate:.1%}, "
+                                 f"ROC-AUC: {roc_auc:.3f}, PR-AUC: {pr_auc:.3f}, "
+                                 f"TP: {true_positives}, FP: {false_positives}")
 
                     if precision >= params.get('min_precision', 0.50):
                         beta2 = 0.25
@@ -453,16 +469,23 @@ class BinaryHyperparameterSearch:
                         if score > self.champion_score:
                             self.champion_score = score
                             self.champion = {
-                                'params':    params,
-                                'model':     model,
-                                'scaler':    scaler,
-                                'threshold': threshold,
-                                'precision': precision,
-                                'recall':    recall,
-                                'f1':        f1,
-                                'win_rate':  win_rate,
+                                'params':         params,
+                                'model':          model,
+                                'scaler':         scaler,
+                                'threshold':      threshold,
+                                'precision':      precision,
+                                'recall':         recall,
+                                'f1':             f1,
+                                'win_rate':       win_rate,
+                                'roc_auc':        roc_auc,
+                                'pr_auc':         pr_auc,
+                                'true_positives': true_positives,
+                                'false_positives': false_positives,
+                                'buy_samples':    buy_count,
                             }
-                            logging.info(f"  *** NEW CHAMPION! Precision: {precision:.1%}, Recall: {recall:.1%}, F0.5: {score:.3f} ***")
+                            logging.info(f"  *** NEW CHAMPION! Precision: {precision:.1%}, Recall: {recall:.1%}, "
+                                         f"F0.5: {score:.3f}, ROC-AUC: {roc_auc:.3f}, PR-AUC: {pr_auc:.3f}, "
+                                         f"TP: {true_positives}, FP: {false_positives} ***")
                             self._save_champion_json()
 
                     self.results.append(result)
@@ -491,7 +514,8 @@ class BinaryHyperparameterSearch:
         print("="*70)
         
         cols = ['window_size', 'horizon', 'take_profit', 'stop_loss',
-                'classifier', 'precision', 'recall', 'f1', 'win_rate']
+                'classifier', 'precision', 'recall', 'f1', 'win_rate',
+                'roc_auc', 'pr_auc', 'true_positives', 'false_positives']
 
         # Compute F-beta (β=0.5) for ranking
         beta2 = 0.25
@@ -519,8 +543,12 @@ class BinaryHyperparameterSearch:
             print(f"Precision:  {self.champion['precision']:.1%}")
             print(f"Recall:     {self.champion['recall']:.1%}")
             print(f"F1 Score:   {self.champion['f1']:.3f}")
-            print(f"Win Rate:   {self.champion['win_rate']:.1%}")
-        
+            print(f"Win Rate:   {self.champion['win_rate']:.1%}  (note: identical to precision by definition, not an independent check)")
+            print(f"ROC-AUC:    {self.champion.get('roc_auc', 0):.3f}")
+            print(f"PR-AUC:     {self.champion.get('pr_auc', 0):.3f}")
+            print(f"TP / FP:    {self.champion.get('true_positives', 0)} / {self.champion.get('false_positives', 0)}  "
+                  f"(precision at this sample size {'may be noisy' if self.champion.get('true_positives', 0) + self.champion.get('false_positives', 0) < 30 else 'has a reasonable base'})")
+
         print("="*70)
     
     def save_results(self):

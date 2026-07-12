@@ -623,6 +623,14 @@ pip install scikit-learn xgboost pycatch22 pyarrow joblib pandas numpy
 - [x] Run search with recall-optimized objective — champion: Random Forest, window=21, horizon=9, take_profit=0.8%, stop_loss=0.5%, threshold=0.005, precision=37.1%, recall=100%, F1=0.541
 - [x] **Re-run search on fresh 2023–2026 dataset (2026-05-29)** — retrained with `--quick --max-files 200` on 481 symbols covering 2023-01-01 to 2026-05-28. Champion unchanged architecturally (window=21, horizon=6, RF) but retrained on current market conditions. New: threshold=0.004, precision=38.2%, recall=100%, F1=0.553
 - [x] **Re-run search with precision-weighted objective (2026-06-07, complete)** — switched from recall-first to F-beta (β=0.5), precision floor 50–55%. Ran `--quick` on all 1,312 files (240 combinations, ~45 hrs). New champion: XGBoost, window=30, horizon=12, take_profit=1.0%, stop_loss=0.8%, threshold=0.777, precision=50.0%, recall=49.2%, F1=0.496.
+- [x] **Tightened quick search take_profit thresholds (2026-07-09)** — raised `take_profit` from `[0.008, 0.010, 0.015]` to `[0.020, 0.030, 0.040]` and `stop_loss` from `[0.005, 0.008]` to `[0.010, 0.015]`, intending to cut the BUY label rate from ~25% to ~5–10%. Ran `--quick` on the Windows PC. New champion: XGBoost, window=30, horizon=12, take_profit=2.0%, stop_loss=1.5%, threshold=0.820, precision=50.0%, recall=15.6%, F1=0.237, win_rate=50.0%.
+- [x] **Diagnosed the 2026-07-09 champion as weak (2026-07-11/12)** — investigated why the result "felt like a coin toss":
+  - **ROC-AUC = 0.574** (PR-AUC = 0.467 vs. a 40.4% base rate) — barely better than random. Across the full 288-combo grid, the best ROC-AUC anywhere is only ~0.687, and that combo's usable recall is in the single digits (TP counts of 1–3 — overfitting noise, not signal).
+  - **Champion selection mechanically converges to precision ≈ `min_precision` floor**, independent of true model quality. `find_optimal_threshold()` maximizes F-beta(β=0.5) subject to a precision floor, and since F-beta only rewards more recall once the floor is cleared, the optimizer always lands at the lowest threshold that just barely clears the floor. The 2026-06-07 champion (precision 50.02%) and the 2026-07-09 champion (precision 50.00%) hit the same number from two unrelated searches — confirming this is a floor artifact, not a coincidence.
+  - **The label-rate goal didn't land**: actual `buy_pct` at the champion's params is 40.4%, not the targeted 5–10%. `take_profit=2–4%` over a 12×4h-bar horizon is apparently still common on this instrument's volatility — need a larger `take_profit` or shorter `horizon` to hit the intended rarity.
+  - **"Win rate" is not an independent check** — in this codebase `win_rate = TP/(TP+FP)`, the same formula as `precision`. Seeing them match is not cross-validation.
+- [x] **Added diagnostics to `ml/binary_search.py` (2026-07-11)** — ROC-AUC, PR-AUC, and TP/FP counts are now logged per-combination, saved to `champion_params_*.json`, and shown in the console summary; the summary also flags that win_rate duplicates precision and warns when TP+FP < 30 (statistically noisy — several rows in the 2026-07-09 grid hit "precision=1.0" on just 1–3 samples).
+- [ ] **Full (non-quick) grid search running on Windows PC (started 2026-07-12)** — broader search space (`define_search_space()`) to get a more reliable read on whether any parameter combination has genuine separability before deciding next steps. Decision pending results.
 
 ### Phase 4: BUY Detector Integration ✅
 - [x] Create `ml/binary_predictor.py`
@@ -899,6 +907,19 @@ df['rel_strength'] = df['close'].pct_change(20) - spy_df['close'].pct_change(20)
 ---
 
 ## Next Steps
+
+### In Progress — Full Search Evaluation Before Deciding (2026-07-12)
+
+The 2026-07-09 quick-search retrain (tighter take_profit, targeting a rarer BUY label) produced a champion that looked like a coin toss: precision pinned at exactly the 50% floor, recall down to 15.6%, and — once ROC-AUC/PR-AUC were checked — an ROC-AUC of only 0.574. Diagnosis (above) shows this is partly a search-methodology artifact (champion selection always parks at the precision floor) and partly a real finding (weak separability at this label rarity/timeframe with the current feature set; the intended 5–10% label rate wasn't hit either).
+
+Before making any changes to labeling, features, or the live model, a **full (non-quick) grid search** is running on the Windows PC to get a broader, more reliable picture:
+1. Confirm whether *any* combination in the wider search space clears a meaningfully-above-random ROC-AUC (not just the floor-chasing precision number).
+2. Check whether label rates across the grid ever land in the intended 5–10% range, and if so, whether recall/ROC-AUC hold up there.
+3. Use the TP/FP counts (now logged) to discard any "champion" resting on a handful of samples.
+
+**Decision pending these results.** Likely branches depending on outcome:
+- If ROC-AUC stays near 0.5 everywhere → the current technical-indicator/catch22 feature set may not carry enough signal for this labeling task; consider market-context features (Phase 7) or reconsidering the take_profit/horizon target before more grid searches.
+- If some combination shows real separability → retrain the live champion on that combination and paper-trade to validate, same as prior cycles.
 
 ### Completed — BUY Model Precision Retraining (2026-06-07)
 
