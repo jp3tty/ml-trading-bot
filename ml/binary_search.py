@@ -62,7 +62,7 @@ class BinaryHyperparameterSearch:
             'stop_loss':     [0.003, 0.005, 0.008],
             'classifier':    ['random_forest', 'xgboost'],
             'n_estimators':  [100, 200],
-            'max_depth':     [5, 10, None],
+            'max_depth':     [5, 10, 15],
             'min_precision': [0.50, 0.55],
         }
 

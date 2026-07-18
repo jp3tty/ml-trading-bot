@@ -921,6 +921,8 @@ Before making any changes to labeling, features, or the live model, a **full (no
 - If ROC-AUC stays near 0.5 everywhere → the current technical-indicator/catch22 feature set may not carry enough signal for this labeling task; consider market-context features (Phase 7) or reconsidering the take_profit/horizon target before more grid searches.
 - If some combination shows real separability → retrain the live champion on that combination and paper-trade to validate, same as prior cycles.
 
+**2026-07-18 update:** The first full-search run on the Windows PC landed a random_forest champion whose pickle was ~732MB — roughly 300x the size of every prior committed champion (all under 25MB) — because `define_search_space()` included `max_depth: None` (unbounded) and the full search runs on far more data than the quick search's `--max-files 200` cap. Unbounded trees on that much data produce an explosion of leaf nodes, both bloating the pickle and very likely overfitting (consistent with the overfitting concern already raised above). Fixed by capping `max_depth` to `[5, 10, 15]` in `define_search_space()` (`ml/binary_search.py`). The oversized pickle is discarded; re-running the full search on the PC with the bounded space is the next step.
+
 ### Completed — BUY Model Precision Retraining (2026-06-07)
 
 Triggered by 3-week paper trade analysis (May 12 – June 1, 2026): 80 closed trades, 40% win rate, -$401.93 net P&L, profit factor 0.70. Full report: `reports/2026-06-05_performance_report.md`.
