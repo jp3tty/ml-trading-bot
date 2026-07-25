@@ -483,9 +483,52 @@ def run_scan(symbols=None, min_confidence=0.6, min_sell_confidence=0.3, dry_run=
                 logging.warning(f"{symbol}: SELL features could not be built")
                 continue
 
+            entry_time = trader._get_position_entry_time(symbol)
+            bars_held = None
+            if entry_time is not None:
+                bar_index = df.index
+                if getattr(bar_index, 'tz', None) is not None:
+                    bar_index = bar_index.tz_localize(None)
+                bars_held = int((bar_index > entry_time).sum())
+            # Only force-close flat/losing positions — a winner past the horizon
+            # is still bounded by the TP bracket, so let it run rather than
+            # cutting a profitable trade just because it's outlasted training.
+            force_close = (
+                bars_held is not None
+                and bars_held >= trader.max_hold_bars
+                and pnl_pct <= 0
+            )
+
             action = 'NO_ACTION'
 
-            if prediction['is_sell'] and prediction['probability'] >= min_sell_confidence:
+            if force_close:
+                if dry_run:
+                    action = 'DRY_RUN_MAX_HOLD'
+                    logging.info(
+                        f"{symbol}: [DRY RUN] MAX_HOLD force-close — held {bars_held} bars, "
+                        f"past the {trader.max_hold_bars}-bar trained horizon "
+                        f"(P&L={pnl_pct*100:+.2f}%)"
+                    )
+                else:
+                    try:
+                        open_orders = conn.api.list_orders(status='open', symbols=[symbol])
+                        for o in open_orders:
+                            conn.api.cancel_order(o.id)
+                        conn.api.close_position(symbol)
+                        action = 'MAX_HOLD_ORDER'
+                        ind = _get_indicators(df)
+                        log_order(symbol, 'SELL', position.qty, current_price,
+                                  None, None, None, prediction['probability'],
+                                  rsi=ind['rsi'], momentum=ind['momentum'])
+                        session_orders.append(('SELL', symbol))
+                        logging.info(
+                            f"{symbol}: MAX_HOLD force-close order placed @ ${current_price:.2f}  "
+                            f"held {bars_held} bars past the {trader.max_hold_bars}-bar horizon  "
+                            f"[entry=${avg_entry:.2f}  P&L={pnl_pct*100:+.2f}%]"
+                        )
+                    except Exception as e:
+                        logging.error(f"{symbol}: error closing position: {e}")
+            elif prediction['is_sell'] and prediction['probability'] >= min_sell_confidence:
                 if pnl_pct < MIN_SELL_PNL_PCT:
                     action = 'PNL_GATE'
                     logging.info(
@@ -523,7 +566,8 @@ def run_scan(symbols=None, min_confidence=0.6, min_sell_confidence=0.3, dry_run=
                     f"{symbol}: hold  prob={prediction['probability']:.4f}  "
                     f"(model_threshold={prediction['threshold']:.4f}  "
                     f"sell_confidence_floor={min_sell_confidence:.4f})  "
-                    f"entry=${avg_entry:.2f}  P&L={pnl_pct*100:+.2f}%"
+                    f"entry=${avg_entry:.2f}  P&L={pnl_pct*100:+.2f}%  "
+                    f"bars_held={bars_held if bars_held is not None else '?'}/{trader.max_hold_bars}"
                 )
 
             log_signal(symbol, 'SELL', prediction, action, current_price)

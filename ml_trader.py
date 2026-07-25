@@ -75,6 +75,10 @@ class MLTrader:
         # BUY detector — loads latest champion if no path specified
         self.buy_detector = BinaryBuyPredictor(model_path=model_path)
         buy_info = self.buy_detector.get_model_info()
+        # Force-close horizon matches the BUY model's training horizon: past this many
+        # bars, "neither barrier hit" was labeled a negative outcome in training, so a
+        # live position that's gone this long has no model support either direction.
+        self.max_hold_bars = buy_info['params'].get('horizon', 12)
         logging.info(
             f"BUY detector ready | "
             f"window={buy_info['params'].get('window_size')} | "
@@ -150,6 +154,26 @@ class MLTrader:
         except Exception as e:
             logging.error(f"Error checking positions: {e}")
             return True  # Assume position exists to be safe
+
+    def _get_position_entry_time(self, symbol):
+        """Return the timestamp of the oldest currently-open BUY for this symbol.
+
+        Alpaca's position object has no entry timestamp, so this replays our
+        own order log: each SELL closes the oldest unmatched BUY (FIFO),
+        matching how close_position() closes the whole position at once.
+        """
+        if not os.path.isfile(ORDER_LOG):
+            return None
+        open_buys = []
+        with open(ORDER_LOG, newline='') as f:
+            for row in csv.DictReader(f):
+                if row['symbol'] != symbol:
+                    continue
+                if row['side'] == 'BUY':
+                    open_buys.append(row['timestamp'])
+                elif row['side'] == 'SELL' and open_buys:
+                    open_buys.pop(0)
+        return datetime.fromisoformat(open_buys[0]) if open_buys else None
 
     def calculate_position_size(self, symbol, price):
         """Calculate position size based on account and risk management"""
@@ -256,11 +280,29 @@ class MLTrader:
 
                 avg_entry = float(position.avg_entry_price)
                 pnl_pct = (current_price - avg_entry) / avg_entry
+
+                entry_time = self._get_position_entry_time(symbol)
+                bars_held = None
+                if entry_time is not None:
+                    bar_index = df.index
+                    if getattr(bar_index, 'tz', None) is not None:
+                        bar_index = bar_index.tz_localize(None)
+                    bars_held = int((bar_index > entry_time).sum())
+                # Only force-close flat/losing positions — a winner past the horizon
+                # is still bounded by the TP bracket, so let it run rather than
+                # cutting a profitable trade just because it's outlasted training.
+                force_close = (
+                    bars_held is not None
+                    and bars_held >= self.max_hold_bars
+                    and pnl_pct <= 0
+                )
+
                 logging.info(
                     f"{symbol}: SELL={'YES' if should_sell else 'NO'} "
                     f"(prob={confidence:.3f}) @ ${current_price:.2f}  "
                     f"[entry=${avg_entry:.2f}  "
-                    f"P&L={pnl_pct*100:+.1f}%]"
+                    f"P&L={pnl_pct*100:+.1f}%  "
+                    f"bars_held={bars_held if bars_held is not None else '?'}/{self.max_hold_bars}]"
                 )
 
                 if should_sell and pnl_pct < MIN_SELL_PNL_PCT:
@@ -269,6 +311,14 @@ class MLTrader:
                         f"below minimum +{MIN_SELL_PNL_PCT*100:.1f}%"
                     )
                     should_sell = False
+
+                if force_close and not should_sell:
+                    logging.info(
+                        f"{symbol}: MAX_HOLD force-close — held {bars_held} bars, "
+                        f"past the BUY model's {self.max_hold_bars}-bar trained horizon "
+                        f"(P&L={pnl_pct*100:+.1f}%)"
+                    )
+                    should_sell = True
 
                 if should_sell:
                     if dry_run:
