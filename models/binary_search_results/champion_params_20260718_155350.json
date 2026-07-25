@@ -1,0 +1,22 @@
+{
+  "params": {
+    "window_size": 30,
+    "horizon": 12,
+    "take_profit": 0.01,
+    "stop_loss": 0.008,
+    "classifier": "xgboost",
+    "n_estimators": 200,
+    "max_depth": 10,
+    "min_precision": 0.5
+  },
+  "threshold": 0.8142310976982117,
+  "precision": 0.5000867980210051,
+  "recall": 0.22121753153256926,
+  "f1": 0.3067442200955664,
+  "win_rate": 0.5000867980210051,
+  "roc_auc": 0.5672697560105124,
+  "pr_auc": 0.4771339654451548,
+  "true_positives": 11523,
+  "false_positives": 11519,
+  "buy_samples": 264422
+}
