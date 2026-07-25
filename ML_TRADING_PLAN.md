@@ -630,7 +630,7 @@ pip install scikit-learn xgboost pycatch22 pyarrow joblib pandas numpy
   - **The label-rate goal didn't land**: actual `buy_pct` at the champion's params is 40.4%, not the targeted 5–10%. `take_profit=2–4%` over a 12×4h-bar horizon is apparently still common on this instrument's volatility — need a larger `take_profit` or shorter `horizon` to hit the intended rarity.
   - **"Win rate" is not an independent check** — in this codebase `win_rate = TP/(TP+FP)`, the same formula as `precision`. Seeing them match is not cross-validation.
 - [x] **Added diagnostics to `ml/binary_search.py` (2026-07-11)** — ROC-AUC, PR-AUC, and TP/FP counts are now logged per-combination, saved to `champion_params_*.json`, and shown in the console summary; the summary also flags that win_rate duplicates precision and warns when TP+FP < 30 (statistically noisy — several rows in the 2026-07-09 grid hit "precision=1.0" on just 1–3 samples).
-- [ ] **Full (non-quick) grid search running on Windows PC (started 2026-07-12)** — broader search space (`define_search_space()`) to get a more reliable read on whether any parameter combination has genuine separability before deciding next steps. Decision pending results.
+- [x] **Full (non-quick) grid search on Windows PC (started 2026-07-12, complete 2026-07-18, pulled 2026-07-25)** — broader search space (`define_search_space()`, 2,016 combos) to get a more reliable read on whether any parameter combination has genuine separability. Result: no combination clears meaningfully-above-random ROC-AUC (min 0.545, mean 0.570, max 0.614 across the full grid; max 0.611 restricted to statistically robust rows with TP+FP≥30), and zero robust combos land the 5–10% target BUY label rate. Confirms the 2026-07-11/12 diagnosis was not a quick-search artifact — see 2026-07-25 update below.
 
 ### Phase 4: BUY Detector Integration ✅
 - [x] Create `ml/binary_predictor.py`
@@ -908,7 +908,7 @@ df['rel_strength'] = df['close'].pct_change(20) - spy_df['close'].pct_change(20)
 
 ## Next Steps
 
-### In Progress — Full Search Evaluation Before Deciding (2026-07-12)
+### Completed — Full Search Evaluation (2026-07-12 → 2026-07-25)
 
 The 2026-07-09 quick-search retrain (tighter take_profit, targeting a rarer BUY label) produced a champion that looked like a coin toss: precision pinned at exactly the 50% floor, recall down to 15.6%, and — once ROC-AUC/PR-AUC were checked — an ROC-AUC of only 0.574. Diagnosis (above) shows this is partly a search-methodology artifact (champion selection always parks at the precision floor) and partly a real finding (weak separability at this label rarity/timeframe with the current feature set; the intended 5–10% label rate wasn't hit either).
 
@@ -922,6 +922,12 @@ Before making any changes to labeling, features, or the live model, a **full (no
 - If some combination shows real separability → retrain the live champion on that combination and paper-trade to validate, same as prior cycles.
 
 **2026-07-18 update:** The first full-search run on the Windows PC landed a random_forest champion whose pickle was ~732MB — roughly 300x the size of every prior committed champion (all under 25MB) — because `define_search_space()` included `max_depth: None` (unbounded) and the full search runs on far more data than the quick search's `--max-files 200` cap. Unbounded trees on that much data produce an explosion of leaf nodes, both bloating the pickle and very likely overfitting (consistent with the overfitting concern already raised above). Fixed by capping `max_depth` to `[5, 10, 15]` in `define_search_space()` (`ml/binary_search.py`). The oversized pickle is discarded; re-running the full search on the PC with the bounded space is the next step.
+
+**2026-07-25 update — decision reached:** The bounded-`max_depth` full search (2,016 combos, `binary_search_20260718_155350.csv`) resolves the pending question from 2026-07-12:
+- **No combination shows real separability.** ROC-AUC ranges from 0.545 to 0.614 across the entire grid (mean 0.570); restricting to statistically robust rows (TP+FP ≥ 30, 1,523 of 2,016 combos) the ceiling is 0.611. This is essentially flat — the earlier 0.574 "coin toss" result was not a quick-search fluke.
+- **The 5–10% target label rate is never hit with a reliable sample.** Zero robust-sample combos land in that range; the highest-AUC robust combos sit at 21–29% `buy_pct`.
+- **New champion** (deployed to `champion_buy.pkl`): XGBoost, window=30, horizon=12, take_profit=1.0%, stop_loss=0.8%, max_depth=10, threshold=0.814, precision=50.0% (pinned to the floor, as expected), recall=22.1%, ROC-AUC=0.567, on a large reliable sample (TP=11,523, FP=11,519).
+- **Per the branch defined above, this triggers path 1**: the current technical-indicator/catch22 feature set does not carry enough signal for this labeling task at any take_profit/horizon/stop_loss combination tried. Next step is Phase 7 (market-context features) or reconsidering the take_profit/horizon target — not further grid searches over the same feature set.
 
 ### Completed — BUY Model Precision Retraining (2026-06-07)
 
