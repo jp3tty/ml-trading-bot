@@ -68,7 +68,7 @@ class SellHyperparameterSearch:
             'sell_threshold': [0.015, 0.02, 0.025, 0.03],  # Meaningful declines only
             'classifier':     ['random_forest', 'xgboost'],
             'n_estimators':   [100, 200],
-            'max_depth':      [5, 10, None],
+            'max_depth':      [5, 10, 15],  # capped — None caused a 732MB BUY champion pickle (see binary_search.py)
             'min_precision':  [0.45, 0.5],
         }
 

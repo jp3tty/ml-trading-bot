@@ -647,6 +647,8 @@ pip install scikit-learn xgboost pycatch22 pyarrow joblib pandas numpy
 - [x] Create `ml/binary_sell_predictor.py`
 - [x] Integrate with ml_trader.py
 - [x] **Re-run SELL search on fresh 2023–2026 dataset (2026-05-30)** — identified that `sell_threshold=0.005` had been dropped from the quick search space, capping precision at ~34–35%. Restored 0.005 to `define_quick_search_space()` and re-ran with `--quick --max-files 200`. New champion: Random Forest, window=20, horizon=5, sell_thresh=0.5%, precision=41.3%, recall=99.9%, F1=0.585, threshold=0.597
+- [x] **Retuned search space to fix always-fires SELL model (2026-06-25)** — the 2026-05-30 champion's 99.9% recall / 41% precision meant it fired on nearly every position regardless of conditions. Retuned `binary_sell_search.py`: `sell_threshold` 0.5%→1.5–3% (meaningful declines only), `horizon` 5→6/9/12 bars (matching BUY model), balanced class weights instead of 3:1 SELL weighting, and champion selection flipped from recall-floor to precision-floor (≥45–50% precision AND ≥20% recall, ranked by F1). Live brackets widened to SL=-2.0%/TP=+2.5% in the same commit to survive intraday noise. The retuned search space was not actually re-run at the time — see the full-search result below.
+- [x] **Full (non-quick) grid search on this Mac under `caffeinate` (2026-07-25 → 2026-07-26)** — finally executed the retuned search space (1,152 combinations, full 1,312-file dataset, ~29 hours). Fixed a latent bug first: `define_search_space()` had `max_depth: [5, 10, None]`, the same unbounded-tree pattern that produced BUY's 732MB pickle; capped to `[5, 10, 15]` before running. **Result: zero combinations qualified as champion** (precision≥0.5 AND recall≥0.2 never cleared together) — `self.champion` stayed `None`, so the live SELL model is unchanged, still the weak 2026-05-30 champion (ROC-AUC≈0.53). ROC-AUC across the full grid: min 0.521, max 0.566, mean 0.545 — flat and, if anything, lower-ceilinged than the BUY grid (0.545–0.614, mean 0.570). The precision/recall trade-off is sharply bimodal, not a gradient: 865/1,152 combos cleared the precision floor only by predicting almost nothing (near-zero recall), while high-recall combos (up to ~99%) crash to 19–34% precision — nothing lands in between at any window/horizon/threshold/classifier/depth combination. This is the same weak-separability conclusion as the BUY full search, now confirmed for SELL with equal rigor: the current feature set doesn't carry a usable SELL signal at any labeling choice tried. Results: `models/sell_search_results/sell_search_20260726_172445.csv`.
 
 ### Phase 6: Full Integration ✅ / 🔄 Active
 - [x] Combine BUY and SELL detectors in ml_trader.py
@@ -958,7 +960,7 @@ Both models retrained on 481 symbols covering 2023-01-01 to 2026-05-28 using `--
 2. Implement walk-forward validation to check for overfitting over time
 3. Ensemble multiple BUY champion models
 4. Add MACD and Bollinger Bands to the feature set
-5. Consider replacing SELL ML model with trailing stop (simpler, no retraining needed)
+5. **Replace SELL ML model with a trailing stop** (simpler, no retraining needed) — was a suspicion, now evidence-backed: the 2026-07-25/26 full SELL grid search (1,152 combos) found zero combinations with genuine separability (ROC-AUC 0.521–0.566, mean 0.545), matching the BUY full search's weak-separability conclusion. The current feature set doesn't support a usable ML SELL signal.
 
 ### Long-term — Production
 1. Paper trade for 1+ months with consistent positive P&L before going live
