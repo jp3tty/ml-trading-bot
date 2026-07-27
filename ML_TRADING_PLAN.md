@@ -962,6 +962,15 @@ Both models retrained on 481 symbols covering 2023-01-01 to 2026-05-28 using `--
 4. Add MACD and Bollinger Bands to the feature set
 5. **Replace SELL ML model with a trailing stop** (simpler, no retraining needed) — was a suspicion, now evidence-backed: the 2026-07-25/26 full SELL grid search (1,152 combos) found zero combinations with genuine separability (ROC-AUC 0.521–0.566, mean 0.545), matching the BUY full search's weak-separability conclusion. The current feature set doesn't support a usable ML SELL signal.
 
+   **Design decided (2026-07-27), implementation deferred — review at a later date:**
+   - **Keep the fixed +2.5% TP ceiling as-is.** The trailing stop replaces the ML SELL signal only; it isn't a bigger overhaul of the exit shape.
+   - **Activation:** fixed SL (-2.0%) continues to protect from entry to breakeven, same as today. Once unrealized P&L crosses `MIN_SELL_PNL_PCT` (+0.5%), switch from the fixed SL to a trailing stop instead of consulting the ML SELL model. Reuses the existing gate constant — no new activation logic needed.
+   - **Order mechanism: native Alpaca `trailing_stop` order** (`trail_percent`), not app-level polling logic. Rationale: the current SELL pass only evaluates held positions when the bot runs (twice/day at best — see the "are held stocks evaluated every cycle" discussion, 2026-07-25); a native trailing stop runs exchange-side continuously, closing that gap. This was the part flagged as least certain and needs verification before implementing:
+     - Alpaca's `submit_order` takes `trail_price`/`trail_percent` as a **standalone order type**, not a bracket leg alongside `take_profit`/`stop_loss` dicts (which is what `place_bracket_order()` in `alpaca_trading.py` uses today). Need to work out the correct order structure to keep the TP ceiling *and* a native trailing stop live simultaneously (e.g., a bracket at entry that later gets replaced/re-submitted once the +0.5% activation threshold is crossed, vs. some other Alpaca-supported combination) before writing code.
+   - **Trail distance: ~1.0–1.5%** (tighter than the 2.0% SL since it's protecting an already-banked gain, not absorbing entry risk; wide enough to survive normal 4h-bar noise, per the same reasoning that widened SL/TP 2026-06-25). Not yet validated against historical 4h bar data — do that before committing to a number, the same way the grid search runtime was timed before launching.
+   - **ML SELL model: stays loaded, kept out of the trading decision.** `BinarySellPredictor` continues running and its predictions keep getting logged to `signals.csv` (useful as a baseline for comparison if a future feature set — e.g., Phase 7 market-context features — is tried), but `should_sell()` no longer drives `execute_trade()`.
+   - **Not yet implemented.** This is the agreed design spec for a future session.
+
 ### Long-term — Production
 1. Paper trade for 1+ months with consistent positive P&L before going live
 2. Switch to live trading with small position sizes
