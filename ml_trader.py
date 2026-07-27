@@ -32,6 +32,7 @@ STOP_LOSS_PCT   = 0.020   # -2.0%: wider than training labels to survive intrada
 USE_TAKE_PROFIT = True    # +2.5%: maintains 1.25× R/R ratio with wider stop
 TAKE_PROFIT_PCT = 0.025
 MIN_SELL_PNL_PCT = 0.005  # +0.5%: ML SELL won't fire below this gain (filters noise)
+WATCHLIST_INVALID_PCT = 0.5  # log a loud alert if >=50% of scraped tickers aren't real Alpaca symbols
 
 
 def _get_indicators(df):
@@ -104,9 +105,44 @@ class MLTrader:
             )
 
     def get_watchlist(self):
-        """Symbols to scan for BUY signals — FinViz momentum screener."""
-        from stock_picker.stock_screener import get_tickers
-        return get_tickers()
+        """Symbols to scan for BUY signals — Alpaca most-actives screener."""
+        return self.conn.get_most_active_symbols()
+
+    def _validate_watchlist(self, symbols):
+        """Cross-check scraped tickers against Alpaca's tradable symbol list.
+
+        Catches the FinViz scraper silently returning corrupted tickers — seen
+        2026-07-17 through 2026-07-27, where the scraper kept "succeeding" and
+        logging a clean-looking ticker list, but every symbol failed Alpaca's
+        data lookup, so the bot silently placed zero trades for ten days with
+        no errors anywhere in the log.
+        """
+        if not symbols:
+            return symbols
+        try:
+            tradable = self.conn.get_tradable_symbols()
+        except Exception as e:
+            logging.error(f"Could not fetch tradable symbols for watchlist validation: {e}")
+            return symbols
+
+        valid   = [s for s in symbols if s in tradable]
+        invalid = [s for s in symbols if s not in tradable]
+        invalid_pct = len(invalid) / len(symbols)
+
+        if invalid_pct >= WATCHLIST_INVALID_PCT:
+            logging.error(
+                f"WATCHLIST SOURCE LIKELY BROKEN: {len(invalid)}/{len(symbols)} "
+                f"({invalid_pct*100:.0f}%) scraped tickers are not valid Alpaca symbols "
+                f"— e.g. {invalid[:5]}. Check the FinViz scraper "
+                f"(stock_picker/stock_screener.py) — it may be getting served corrupted data."
+            )
+        elif invalid:
+            logging.warning(
+                f"Watchlist: {len(invalid)}/{len(symbols)} scraped tickers aren't valid "
+                f"Alpaca symbols, skipping: {invalid}"
+            )
+
+        return valid
 
     def get_held_positions(self):
         """Return all currently held positions as {symbol: position_object}.
@@ -353,6 +389,7 @@ class MLTrader:
         # ------------------------------------------------------------------
         if symbols is None:
             symbols = self.get_watchlist()
+            symbols = self._validate_watchlist(symbols)
 
         buy_candidates = [s for s in symbols if s not in held]
         open_slots     = max(0, MAX_POSITIONS - len(held))

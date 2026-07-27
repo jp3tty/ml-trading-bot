@@ -589,6 +589,7 @@ def run_scan(symbols=None, min_confidence=0.6, min_sell_confidence=0.3, dry_run=
     # ------------------------------------------------------------------
     if symbols is None:
         symbols = trader.get_watchlist()
+        symbols = trader._validate_watchlist(symbols)
 
     buy_candidates  = [s for s in symbols if s not in held and s not in today_buys]
     skipped         = len(symbols) - len(buy_candidates)

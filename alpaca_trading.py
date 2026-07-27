@@ -11,6 +11,7 @@ from datetime import datetime, timedelta
 import alpaca_trade_api as tradeapi
 from alpaca_trade_api.rest import TimeFrame
 import pandas as pd
+import requests
 from dotenv import load_dotenv
 
 logging.basicConfig(
@@ -58,6 +59,58 @@ class AlpacaConnection:
         ).df
 
         return bars
+
+    def get_most_active_symbols(self, top=50, min_price=5.0):
+        """Return the most-active US equities from Alpaca's own screener API.
+
+        Replaces the FinViz HTML scraper (2026-07-27) — FinViz was found to
+        be serving deliberately corrupted ticker data to non-browser requests
+        (an anti-scraping defense), which silently zeroed out the BUY
+        watchlist for ~10 days. This endpoint isn't wrapped by the legacy
+        alpaca-trade-api SDK, so it's called directly; it uses the same
+        first-party credentials as everything else.
+
+        Filters out share classes/warrants/units (symbols containing '.')
+        and anything under `min_price`, approximating the quality floor the
+        old FinViz filter (market cap, relative volume, performance) enforced
+        — Alpaca's screener has no equivalent fine-grained filtering.
+        """
+        headers = {
+            "APCA-API-KEY-ID": API_KEY,
+            "APCA-API-SECRET-KEY": SECRET_KEY,
+        }
+        resp = requests.get(
+            "https://data.alpaca.markets/v1beta1/screener/stocks/most-actives",
+            headers=headers,
+            params={"top": top},
+            timeout=15,
+        )
+        resp.raise_for_status()
+
+        candidates = [
+            row["symbol"] for row in resp.json().get("most_actives", [])
+            if row.get("symbol") and "." not in row["symbol"]
+        ]
+        if not candidates:
+            return []
+
+        snapshots = self.api.get_snapshots(candidates, feed="iex")
+        symbols = []
+        for symbol in candidates:
+            snap = snapshots.get(symbol)
+            price = snap.latest_trade.price if snap and snap.latest_trade else None
+            if price and price >= min_price:
+                symbols.append(symbol)
+        return symbols
+
+    def get_tradable_symbols(self):
+        """Return the set of active, tradable US equity symbols Alpaca knows about.
+
+        Used to sanity-check external ticker sources (e.g. the FinViz scraper)
+        against real symbols before spending a data fetch on each one.
+        """
+        assets = self.api.list_assets(status='active', asset_class='us_equity')
+        return {a.symbol for a in assets if a.tradable}
 
     def get_live_price(self, symbol):
         """Return the current ask price from the latest quote, falling back to last trade price."""
