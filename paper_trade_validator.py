@@ -53,16 +53,32 @@ ORDER_FIELDS = [
 ]
 
 
+def _check_header(path, expected_fields):
+    with open(path, newline='') as f:
+        actual = next(csv.reader(f), [])
+    if actual != expected_fields:
+        raise RuntimeError(
+            f"{path}: on-disk header {actual} does not match expected "
+            f"{expected_fields}. The log schema changed without migrating "
+            f"the existing file — fix the file (or the *_FIELDS constant) "
+            f"before appending, or rows will silently misalign."
+        )
+
+
 def ensure_log_files():
     Path("paper_trade_log").mkdir(exist_ok=True)
 
     if not os.path.exists(SIGNAL_LOG):
         with open(SIGNAL_LOG, 'w', newline='') as f:
             csv.DictWriter(f, fieldnames=SIGNAL_FIELDS).writeheader()
+    else:
+        _check_header(SIGNAL_LOG, SIGNAL_FIELDS)
 
     if not os.path.exists(ORDER_LOG):
         with open(ORDER_LOG, 'w', newline='') as f:
             csv.DictWriter(f, fieldnames=ORDER_FIELDS).writeheader()
+    else:
+        _check_header(ORDER_LOG, ORDER_FIELDS)
 
 
 def log_signal(symbol, side, prediction, action_taken, price):
@@ -367,11 +383,6 @@ def print_report():
         return
 
     df = pd.read_csv(SIGNAL_LOG)
-
-    # Handle legacy files that may have old column names
-    if 'is_buy' in df.columns and 'signal_fired' not in df.columns:
-        df = df.rename(columns={'is_buy': 'signal_fired'})
-        df['side'] = 'BUY'
 
     total = len(df)
     print(f"  Total signals logged:    {total}")
