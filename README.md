@@ -339,7 +339,7 @@ A Streamlit dashboard at `dashboard/app.py` provides live visibility into paper 
 |---------|---------|
 | Account Summary | Portfolio value, buying power, day P&L |
 | Active Positions | Open positions with entry price, current price, unrealized P&L, RSI and momentum at entry |
-| Trade History | Entry/exit date, entry/exit price, P&L, exit type (Stop Loss / SELL Signal / Take Profit if enabled), entry indicators |
+| Trade History | Entry/exit date, entry/exit price, P&L, exit type (Take Profit / Stop Loss / SELL Signal), entry indicators |
 | Signal Log | Full history of all tickers scored per run |
 
 After each run, the GitHub Actions workflow automatically commits updated `orders.csv` and `signals.csv` back to the repo so the dashboard always reflects the latest data.

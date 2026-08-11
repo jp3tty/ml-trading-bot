@@ -344,10 +344,12 @@ A live dashboard at `dashboard/app.py` provides real-time visibility into paper 
 |---------|---------|
 | **Account Summary** | Portfolio value, buying power, day P&L |
 | **Active Positions** | Open positions with entry price, current price, unrealized P&L, RSI and momentum at entry |
-| **Trade History** | Entry/exit date, entry/exit price, realized P&L, exit type (Stop Loss / SELL Signal) |
+| **Trade History** | Entry/exit date, entry/exit price, realized P&L, exit type (Take Profit / Stop Loss / SELL Signal) |
 | **Signal Log** | Full history of every ticker scored per run |
 
 Deployed on **Streamlit Community Cloud**, connected directly to this repository. No separate data pipeline — the dashboard reads `orders.csv` and `signals.csv` from the repo, which are kept current by the GitHub Actions commit step.
+
+**Exit type classification** (`dashboard/app.py`): each closed trade's exit is classified from the Alpaca order class of the fill that closed it. `place_bracket_order()` places entries with `order_class='bracket'` (TP + SL) or `'oto'` (SL only) — never `'oco'`. A fill reporting one of those classes is always a bracket leg, disambiguated as Stop Loss vs. Take Profit by whether the fill price sits within 1% of the logged stop-loss (otherwise Take Profit, the only other leg a bracket order can produce). Any other fill — the plain market order `close_position()` submits — is a real ML SELL Signal, MIN_SELL_PNL_PCT-gated exit, or MAX_HOLD force-close. (Fixed 2026-08-11: the classifier previously checked for `order_class == 'oco'`, a value this bot never produces, so every bracket-leg fill fell through to "SELL Signal" regardless of what actually closed the position.)
 
 ### Trade Logging
 

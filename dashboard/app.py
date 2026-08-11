@@ -167,10 +167,15 @@ if not filled.empty:
             pl_abs     = (exit_price - entry_price) * buy['qty']
 
             sl = ind.get('stop_loss', 0)
-            if sell.get('order_type') == 'oco':
-                exit_via = '✅ Take Profit'
-            elif sl and abs(exit_price - sl) / sl < 0.01:
-                exit_via = '🛑 Stop Loss'
+            if sell.get('order_type') in ('bracket', 'oto'):
+                # place_bracket_order() sets order_class to 'bracket' (TP+SL) or
+                # 'oto' (SL only) — never 'oco'. A fill with this class is always
+                # one of the two bracket legs, so distinguish by price proximity
+                # to the logged stop-loss and default to Take Profit otherwise.
+                if sl and abs(exit_price - sl) / sl < 0.01:
+                    exit_via = '🛑 Stop Loss'
+                else:
+                    exit_via = '✅ Take Profit'
             else:
                 exit_via = '🤖 SELL Signal'
 
