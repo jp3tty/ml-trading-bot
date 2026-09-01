@@ -3,7 +3,7 @@ import csv
 import logging
 import os
 import sys
-from datetime import datetime
+from datetime import datetime, timedelta
 
 import pandas as pd
 from alpaca_trade_api.rest import TimeFrame, TimeFrameUnit
@@ -33,6 +33,10 @@ USE_TAKE_PROFIT = True    # +2.5%: maintains 1.25× R/R ratio with wider stop
 TAKE_PROFIT_PCT = 0.025
 MIN_SELL_PNL_PCT = 0.005  # +0.5%: ML SELL won't fire below this gain (filters noise)
 WATCHLIST_INVALID_PCT = 0.5  # log a loud alert if >=50% of scraped tickers aren't real Alpaca symbols
+REENTRY_COOLDOWN_DAYS = 7  # after exiting a symbol, don't re-buy it for this many calendar days
+                           # (~the BUY model's 12-bar / 4h horizon in trading time). The detector
+                           # has no memory of a just-closed trade, so without this it re-buys the
+                           # same ticker hours-to-days after a stop-out, often straight into another.
 
 
 def _get_indicators(df):
@@ -211,6 +215,31 @@ class MLTrader:
                     open_buys.pop(0)
         return datetime.fromisoformat(open_buys[0]) if open_buys else None
 
+    def _symbols_in_cooldown(self, cooldown_days=REENTRY_COOLDOWN_DAYS):
+        """Return {symbol: last_exit_datetime} for symbols exited within the
+        cooldown window — these are blocked from re-entry in the BUY pass.
+
+        Replays the order log for the most recent SELL per symbol (any exit
+        type: ML SELL, bracket SL/TP, max-hold, reconcile). Cooldown is
+        measured in calendar days, so a weekend counts toward it — a 7-day
+        window is roughly one trading week of separation.
+        """
+        if cooldown_days <= 0 or not os.path.isfile(ORDER_LOG):
+            return {}
+        cutoff = datetime.now() - timedelta(days=cooldown_days)
+        last_exit = {}
+        with open(ORDER_LOG, newline='') as f:
+            for row in csv.DictReader(f):
+                if row.get('side') != 'SELL' or not row.get('timestamp'):
+                    continue
+                try:
+                    dt = datetime.fromisoformat(row['timestamp'])
+                except ValueError:
+                    continue
+                if row['symbol'] not in last_exit or dt > last_exit[row['symbol']]:
+                    last_exit[row['symbol']] = dt
+        return {s: dt for s, dt in last_exit.items() if dt >= cutoff}
+
     def calculate_position_size(self, symbol, price):
         """Calculate position size based on account and risk management"""
         account = self.conn.get_account()
@@ -385,17 +414,32 @@ class MLTrader:
                 continue
 
         # ------------------------------------------------------------------
-        # Pass 2: BUY — scan watchlist, skip anything already held
+        # Pass 2: BUY — scan watchlist, skip anything held or in re-entry cooldown
         # ------------------------------------------------------------------
         if symbols is None:
             symbols = self.get_watchlist()
             symbols = self._validate_watchlist(symbols)
 
-        buy_candidates = [s for s in symbols if s not in held]
-        open_slots     = max(0, MAX_POSITIONS - len(held))
+        cooldown = self._symbols_in_cooldown()
+        if cooldown:
+            logging.info(
+                f"Re-entry cooldown ({REENTRY_COOLDOWN_DAYS}d): "
+                + ", ".join(
+                    f"{s} (exited {dt:%m-%d})"
+                    for s, dt in sorted(cooldown.items(), key=lambda kv: kv[1])
+                )
+            )
+
+        buy_candidates = [
+            s for s in symbols if s not in held and s not in cooldown
+        ]
+        sym_set    = set(symbols)
+        open_slots = max(0, MAX_POSITIONS - len(held))
         logging.info(
             f"--- BUY pass: {len(buy_candidates)} candidates "
-            f"({len(symbols) - len(buy_candidates)} skipped — already held) | "
+            f"({len(symbols) - len(buy_candidates)} skipped — "
+            f"{len(sym_set & set(held))} held, "
+            f"{len(sym_set & set(cooldown))} in cooldown) | "
             f"position slots available: {open_slots}/{MAX_POSITIONS} ---"
         )
 

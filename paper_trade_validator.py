@@ -28,7 +28,7 @@ import pandas as pd
 from alpaca_trading import AlpacaConnection
 from ml.binary_predictor import BinaryBuyPredictor
 from ml.binary_sell_predictor import BinarySellPredictor
-from ml_trader import MLTrader, _get_indicators
+from ml_trader import MLTrader, _get_indicators, REENTRY_COOLDOWN_DAYS
 
 logging.basicConfig(
     level=logging.INFO,
@@ -596,18 +596,35 @@ def run_scan(symbols=None, min_confidence=0.6, min_sell_confidence=0.3, dry_run=
             continue
 
     # ------------------------------------------------------------------
-    # Pass 2: BUY — watchlist symbols not already held
+    # Pass 2: BUY — watchlist symbols not held, not bought today, not in cooldown
     # ------------------------------------------------------------------
     if symbols is None:
         symbols = trader.get_watchlist()
         symbols = trader._validate_watchlist(symbols)
 
-    buy_candidates  = [s for s in symbols if s not in held and s not in today_buys]
-    skipped         = len(symbols) - len(buy_candidates)
+    cooldown = trader._symbols_in_cooldown()
+    if cooldown:
+        logging.info(
+            f"Re-entry cooldown ({REENTRY_COOLDOWN_DAYS}d): "
+            + ", ".join(
+                f"{s} (exited {dt:%m-%d})"
+                for s, dt in sorted(cooldown.items(), key=lambda kv: kv[1])
+            )
+        )
+
+    buy_candidates  = [
+        s for s in symbols
+        if s not in held and s not in today_buys and s not in cooldown
+    ]
+    sym_set         = set(symbols)
+    n_held          = len(sym_set & set(held))
+    n_unsettled     = len(sym_set & unsettled)
+    n_cooled        = len(sym_set & set(cooldown))
     open_slots      = max(0, MAX_POSITIONS - len(held))
     logging.info(
         f"--- BUY pass: {len(buy_candidates)} candidates "
-        f"({skipped} skipped — {len(held)} held, {len(unsettled)} same-day guard) | "
+        f"({len(symbols) - len(buy_candidates)} skipped — {n_held} held, "
+        f"{n_unsettled} same-day guard, {n_cooled} in cooldown) | "
         f"position slots available: {open_slots}/{MAX_POSITIONS} ---"
     )
 
