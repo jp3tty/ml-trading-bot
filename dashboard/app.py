@@ -95,12 +95,12 @@ all_symbols = sorted(set(positions['symbol']) if not positions.empty else set()
                       | (set(signals['symbol']) if not signals.empty else set()))
 
 all_dates = pd.concat([
-    filled['filled_at'] if not filled.empty else pd.Series(dtype='datetime64[ns, UTC]'),
+    filled['filled_at'].dt.tz_localize(None) if not filled.empty else pd.Series(dtype='datetime64[ns]'),
     signals['timestamp'] if not signals.empty else pd.Series(dtype='datetime64[ns]'),
 ])
 if not all_dates.empty:
-    min_date = pd.to_datetime(all_dates.min()).tz_localize(None).date()
-    max_date = pd.to_datetime(all_dates.max()).tz_localize(None).date()
+    min_date = all_dates.min().date()
+    max_date = all_dates.max().date()
 else:
     max_date = pd.Timestamp.utcnow().date()
     min_date = max_date - timedelta(days=30)
