@@ -13,16 +13,34 @@ st.title("ML Trading Dashboard")
 
 st.markdown("""
 <style>
-.stTabs [data-baseweb="tab-list"] button[aria-selected="true"],
-.stTabs [data-baseweb="tab-list"] button[aria-selected="true"] * {
+.stTabs button[role="tab"][aria-selected="true"],
+.stTabs button[role="tab"][aria-selected="true"] *,
+.stTabs [data-baseweb="tab"][aria-selected="true"],
+.stTabs [data-baseweb="tab"][aria-selected="true"] * {
     color: inherit !important;
+    background-color: transparent !important;
 }
-.stTabs [data-baseweb="tab-list"] button[aria-selected="false"],
-.stTabs [data-baseweb="tab-list"] button[aria-selected="false"] * {
+.stTabs button[role="tab"][aria-selected="false"],
+.stTabs button[role="tab"][aria-selected="false"] *,
+.stTabs [data-baseweb="tab"][aria-selected="false"],
+.stTabs [data-baseweb="tab"][aria-selected="false"] * {
     color: #888888 !important;
 }
-.stTabs [data-baseweb="tab-highlight"] {
+.stTabs [data-baseweb="tab-highlight"],
+.stTabs [data-testid="stTabsHighlight"] {
     background-color: #888888 !important;
+    background: #888888 !important;
+}
+.stTabs button[data-focus-visible],
+.stTabs button[data-focus-visible] *,
+.stTabs button:focus-visible,
+.stTabs button:focus {
+    outline: none !important;
+    box-shadow: none !important;
+    border-color: #888888 !important;
+    background: transparent !important;
+    background-color: transparent !important;
+    color: inherit !important;
 }
 </style>
 """, unsafe_allow_html=True)
