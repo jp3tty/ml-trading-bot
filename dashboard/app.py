@@ -11,6 +11,22 @@ from alpaca.trading.enums import QueryOrderStatus
 st.set_page_config(page_title="ML Trading Dashboard", layout="wide", page_icon="📈")
 st.title("ML Trading Dashboard")
 
+st.markdown("""
+<style>
+.stTabs [data-baseweb="tab-list"] button[aria-selected="true"],
+.stTabs [data-baseweb="tab-list"] button[aria-selected="true"] * {
+    color: inherit !important;
+}
+.stTabs [data-baseweb="tab-list"] button[aria-selected="false"],
+.stTabs [data-baseweb="tab-list"] button[aria-selected="false"] * {
+    color: #888888 !important;
+}
+.stTabs [data-baseweb="tab-highlight"] {
+    background-color: #888888 !important;
+}
+</style>
+""", unsafe_allow_html=True)
+
 
 # ── Alpaca connection ──────────────────────────────────────────────────────────
 
