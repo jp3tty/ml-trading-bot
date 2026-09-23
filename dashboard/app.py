@@ -192,8 +192,8 @@ except Exception as e:
 st.divider()
 
 
-tab_positions, tab_history, tab_signals = st.tabs(
-    ["📊 Active Positions", "📜 Trade History", "🔔 Recent Signals"]
+tab_history, tab_positions, tab_signals = st.tabs(
+    ["📜 Trade History", "📊 Active Positions", "🔔 Recent Signals"]
 )
 
 
