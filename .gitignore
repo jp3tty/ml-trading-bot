@@ -44,3 +44,6 @@ poetry.lock  # Optional: some prefer to commit this
 .streamlit/secrets.toml
 authenticator_app.txt.claude/worktrees/
 .claude/worktrees/
+
+# Walk-forward feature cache
+saved_data/feature_cache/

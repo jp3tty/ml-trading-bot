@@ -73,6 +73,10 @@ class BinaryFeatureBuilder:
         df = df.copy()
         df.columns = df.columns.str.lower()
 
+        # Timestamp (label bar) of each returned sample, in X/y order —
+        # used by walk-forward validation to split by date
+        self.sample_times = []
+
         # Need enough data for indicators + window + horizon
         min_required = self.window_size + self.horizon + 50
         if len(df) < min_required:
@@ -185,6 +189,7 @@ class BinaryFeatureBuilder:
     def _build_indicator_features(self, df):
         """Build sliding window features technical indicators"""
         X, y = [], []
+        self.sample_times = []
 
         # Get valid indices (no NaN in features or labels)
         feature_cols_available = [c for c in self.indicator_cols if c in df.columns]
@@ -209,12 +214,14 @@ class BinaryFeatureBuilder:
             if not np.isnan(window).any() and pd.notna(label):
                 X.append(window.T) # Transpose to (n_channels, window_size)
                 y.append(int(label))
+                self.sample_times.append(window_indices[-1])
 
         return np.array(X), np.array(y)
 
     def _build_catch22_features(self, df):
         """build catch22 features from price windows"""
         X, y = [], []
+        self.sample_times = []
 
         valid_mask = df['label'].notna()
         if self.min_volume > 0 and 'volume_avg' in df.columns:
@@ -242,6 +249,7 @@ class BinaryFeatureBuilder:
                     if not any(np.isnan(features)):
                         X.append(features)
                         y.append(int(label))
+                        self.sample_times.append(window_indices[-1])
                 except Exception:
                     continue
 
@@ -250,6 +258,7 @@ class BinaryFeatureBuilder:
     def _build_combined_features(self, df):
         """build combined indicator + catch22 features"""
         X, y = [], []
+        self.sample_times = []
 
         feature_cols_available = [c for c in self.indicator_cols if c in df.columns]
         valid_mask = df[feature_cols_available + ['label']].notna().all(axis=1)
@@ -279,6 +288,7 @@ class BinaryFeatureBuilder:
                     if not any(np.isnan(combined)):
                         X.append(combined)
                         y.append(int(label))
+                        self.sample_times.append(window_indices[-1])
                 except Exception:
                     continue
 

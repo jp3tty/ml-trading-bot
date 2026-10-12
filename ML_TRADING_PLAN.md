@@ -687,10 +687,16 @@ pip install scikit-learn xgboost pycatch22 pyarrow joblib pandas numpy
 - [x] **Added a re-entry cooldown to the BUY pass (2026-09-01, commit 1fce099)** — the BUY detector has no memory of a just-closed trade, so it re-bought the same ticker hours-to-days after an exit (NVDA re-bought the same afternoon it stopped out; BITO −$54 over 3 consecutive stop-outs of the same name in two weeks). `MLTrader._symbols_in_cooldown()` replays `orders.csv` for the most recent exit per symbol; anything sold within `REENTRY_COOLDOWN_DAYS` (7 calendar days ≈ the BUY model's 12-bar/4h horizon) is dropped from the BUY candidate list in both `ml_trader.py` and `paper_trade_validator.py`, alongside held positions. Applies after any exit type. Tunable constant; 0 disables. Logs the cooldown roster each run.
 - [x] **Backtested the SELL trigger — no change (2026-09-01)** — see the Phase 7 "Replace SELL ML model with a trailing stop" item, RESOLVED section. Bar-level backtest of every proposed change (raise `MIN_SELL_PNL_PCT`, native trailing stop at several widths, remove ML SELL entirely) shows all of them lose money vs the current gated ML SELL. Code left untouched. The loss driver is the ~60% stop-out rate (entry quality), not the exit logic.
 
-### Phase 7: Refinement ⏳
-- [ ] Ensemble multiple models
-- [ ] Add market context features (SPY correlation)
-- [ ] Walk-forward validation
+### Phase 7: BUY Model Improvement 🔄 Active (started 2026-09-28)
+Losses trace to entry quality, not exits (see 2026-09-01 backtest), so Phase 7 targets the BUY model. Order of work and status:
+- [x] **Step 1 — Walk-forward validation (2026-10-12).** `ml/walk_forward.py` splits by date with purging. Legacy split overstated ROC-AUC by ~0.05. See "Phase 7 progress" under Next Steps.
+- [ ] **Step 2 — Score models on simulated live-rules P&L** (−2%/+2.5% brackets, 12-bar max hold, top-5 per run) instead of precision at a floor. Break-even win rate ≈ 44%.
+- [ ] **Step 3 — Align training labels with live exits** (TP 2.5% / SL 2.0% / 12 bars instead of 1.0% / 0.8%). Consider restricting training to names that would pass today's ≥$10 / ≥$100M-a-day watchlist filter.
+- [ ] **Step 4 — Refresh data**: SPY, QQQ, IWM, all sector ETFs, a volatility proxy (VIXY or SPY realized vol), through current date. The Mac copy ends 2024-11 and has no SPY.
+- [ ] **Step 5 — Market-context features, added in groups and ablated under walk-forward**: (a) SPY trend/volatility, (b) relative strength vs SPY and sector, (c) relative volume, gap, time of day. Hyperparameters fixed at champion values — no full grid.
+- [x] **Step 6 — Cheap regime-filter test on live trades (2026-10-12).** Rejected — no filter helped. See "Phase 7 progress".
+- [ ] **Step 7 — Decide against criteria set in advance**: deploy only if walk-forward ROC-AUC ≥ 0.62 in most folds *and* simulated live-rules P&L is positive in most folds. Otherwise consider a rules-based entry instead of more ML tuning.
+- [ ] Ensemble multiple models (deferred until a single model clears step 7)
 - [ ] Live trading (with small position sizes)
 
 ---
@@ -913,6 +919,31 @@ df['rel_strength'] = df['close'].pct_change(20) - spy_df['close'].pct_change(20)
 ---
 
 ## Next Steps
+
+### Phase 7 progress (2026-10-12)
+
+**Step 1 — Walk-forward validation: done.** `binary_search.py`'s `load_data()` concatenates per-symbol files, then calls `train_test_split(shuffle=False)`. Its test set is therefore the last ~20% of *symbols* over the same dates as training, so market-wide moves leak across the split. This would make date-level features like SPY trend look spuriously predictive. `ml/walk_forward.py` fixes this: expanding-window folds with 3-month test windows. Any training row whose label window reaches into the test window is purged. It also reruns the legacy split on the same data for comparison. `BinaryFeatureBuilder` now records each sample's timestamp in `self.sample_times`.
+
+Results with the live champion params (`champion_params_20260718_155350.json`), 395 random symbols, Mac data 2022-02 → 2024-11, 542k samples:
+
+| Split | ROC-AUC | Precision at frozen 0.814 threshold | Top-5-per-bar hit rate − base rate |
+|---|---|---|---|
+| Legacy (symbol-ordered) | 0.591 | 52.5% | +7.2 pts |
+| Walk-forward, 8 folds | **0.538** (0.520–0.557) | 41–50% | **+3.6 pts**, positive in 8/8 folds |
+
+The leak inflated ROC-AUC by ~0.05, and the "50% precision" doesn't hold on later dates. A small but consistent ranking edge remains. **New baseline for every Phase 7 change: walk-forward ROC-AUC 0.538 / top-5 lift +3.6 pts.** Still to do: rerun on the training PC over 2023–2026 with `--max-files 0`. Results: `models/walk_forward_results/walk_forward_20261012_102224.{csv,json}`.
+
+**Step 6 — Regime filter on live trades: rejected.** 114 round-trips since 2026-06-26 (net −$1,367), regime measured at the prior daily close (no lookahead). Significance via permutation test against random subsets of the same size:
+
+| Buy only when… | Kept | Avg ret kept | Avg ret skipped | p (random ≥ kept) |
+|---|---|---|---|---|
+| SPY > 20-day SMA | 79 | −1.37% | −0.93% | 0.66 |
+| SPY > 50-day SMA | 97 | −1.38% | −0.39% | 0.79 |
+| SPY 5-day return > 0 | 59 | −1.93% | −0.49% | 0.96 |
+| QQQ > 20-day SMA | 64 | −1.71% | −0.62% | 0.90 |
+| Stock 20d return > SPY's | 53 | −2.28% | −0.32% | 0.99 |
+
+Every filter kept *worse* trades than it skipped. The same held on names ≥ $10 only. In the live trades, losses concentrate in extended entries: by RSI-at-entry quartile, average returns were +0.1% / −1.0% / −1.7% / −2.4%. 447k historical 4h bars (≥ $10, live brackets) show the same direction but only ~0.15 pts (RSI < 30 → +0.16%, RSI > 80 → +0.02%). So no RSI cap either. Since the 2026-09-01 watchlist filter: 26 trades, +$18, 50% win (small sample).
 
 ### Completed — Full Search Evaluation (2026-07-12 → 2026-07-25)
 

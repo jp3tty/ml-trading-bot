@@ -1,6 +1,6 @@
 # Auto Trade - ML Stock Trading System
 
-Automated stock trading system using separate binary ML models for entry and exit signal detection. Scans momentum stocks via FinViz, trains independent BUY and SELL detectors on historical candlestick data, and executes bracket orders through Alpaca's paper or live trading API.
+Automated stock trading system using separate binary ML models for entry and exit signal detection. Pulls a filtered most-actives watchlist from Alpaca's screener, scores it with independent BUY and SELL detectors trained on 4-hour candlestick data, and executes GTC bracket orders through Alpaca's paper or live trading API. Runs twice each weekday via GitHub Actions.
 
 ## Strategy
 
@@ -11,7 +11,9 @@ Automated stock trading system using separate binary ML models for entry and exi
 | **BUY** | Generate high-quality entry signals | F-beta (β=0.5) — precision-weighted; target 55%+ live win rate |
 | **SELL** | Detect early signs of decline | Recall — exit fast, miss fewer turns |
 
-The system defaults to **HOLD**. A position is only entered when the BUY detector fires, and only exited when the SELL detector triggers on a held position.
+The system defaults to **HOLD**. A position is entered when the BUY detector fires. It exits by whichever comes first: the bracket take-profit (+2.5%) or stop-loss (−2.0%), a gated ML SELL signal (only on positions already up ≥ +0.5%), or a max-hold force-close (flat/losing positions past the BUY model's 12-bar horizon).
+
+> **Where things stand (2026-09-28):** The pipeline is stable, but the models have not shown a real edge. Full grid searches found ROC-AUC ≈ 0.55–0.61 for BUY and ≈ 0.52–0.57 for SELL across every combination tried. Losses trace to entry quality (~60% of entries hit the stop). A 2026-09-01 backtest showed no alternative exit policy beats the current one. The next lever is new BUY features (Phase 7). See [Current Status](#current-status).
 
 ### Architectural Decision (2026-06-05)
 
@@ -19,7 +21,7 @@ After 3 weeks of paper trading (80 closed trades), the recall-first BUY objectiv
 
 *Previous decision (2026-05-06, reversed):* The BUY detector was optimized for recall over precision on the assumption that the SELL detector would manage bad entries. Paper trading invalidated this assumption.
 
-### Performance Summary (2026-06-05)
+### Performance Summary (2026-06-05 — historical, pre-bracket-change)
 
 | Metric | Value |
 |--------|-------|
@@ -66,21 +68,22 @@ This produces meaningfully balanced labels and filters for setups with an explic
                    └────────────┬─────────────┘
                                 │
                ┌────────────────▼────────────────┐
-               │           ML Trader             │
+               │   paper_trade_validator.py (CI) │
+               │   / ml_trader.py                │
                │   Pass 1: SELL all held tickers │
                │   Pass 2: BUY watchlist tickers │
                └────────────────┬────────────────┘
                                 │
-                       Alpaca bracket orders (fixed SL -0.8%, TP +1.0%, GTC)
+                       Alpaca bracket orders (SL −2.0%, TP +2.5%, GTC)
 ```
 
 ## Project Structure
 
 ```
 ml-trading-bot/
-├── alpaca_trading.py                    # Alpaca REST client
+├── alpaca_trading.py                    # Alpaca REST client + most-actives watchlist screener
 ├── ml_trader.py                         # Main trading orchestrator (cron job)
-├── paper_trade_validator.py             # Paper trading validation + signal log
+├── paper_trade_validator.py             # Scheduled paper-trading entry point (run by CI) + signal log
 ├── techAnalysis.py                      # RSI, momentum, candlestick patterns
 ├── dashboard/
 │   ├── app.py                           # Streamlit monitoring dashboard
@@ -110,8 +113,9 @@ ml-trading-bot/
 │   ├── historical/                      # Daily parquet files
 │   └── historical_4h/                   # 4-hour parquet files
 ├── stock_picker/
-│   └── stock_screener.py                # FinViz momentum screener
-├── Streaming_Method/                    # Legacy pattern scanner
+│   └── stock_screener.py                # FinViz scraper (legacy — used only by Streaming_Method/)
+├── Streaming_Method/                    # Legacy pattern scanner (separate subsystem)
+├── .github/workflows/                   # Twice-daily paper-trading schedule
 ├── reports/
 │   └── YYYY-MM-DD_performance_report.md # Periodic performance analyses
 ├── ML_TRADING_PLAN.md                   # Implementation roadmap
@@ -215,14 +219,14 @@ poetry run python ml_trader.py --dry-run
 poetry run python ml_trader.py
 
 # Specify confidence threshold
-poetry run python ml_trader.py --confidence 0.7
+poetry run python ml_trader.py --confidence 0.45
 
 # Live trading
 poetry run python ml_trader.py --live
 
 # Use specific model files
 poetry run python ml_trader.py \
-  --model models/binary_search_results/champion_binary_20260114_113724.pkl \
+  --model models/binary_search_results/champion_binary_<timestamp>.pkl \
   --sell-model models/sell_search_results/champion_sell_<timestamp>.pkl
 ```
 
@@ -239,22 +243,40 @@ poetry run python ml_trader.py \
 
 ## Trading Loop
 
+The scheduled GitHub Actions job (`.github/workflows/`) runs `paper_trade_validator.py --confidence 0.45 --sell-confidence 0.3` at 14:00 and 17:00 UTC, Mon–Fri. It then commits `paper_trade_log/` back to the repo. `ml_trader.py` has the same two-pass logic for manual runs. Changes to trading rules must be mirrored in both files.
+
 Each run executes two passes:
 
 **Pass 1 — SELL** (held positions from Alpaca):
-- Fetches all open positions once via `get_held_positions()`
-- Runs SELL detector on every held ticker
-- Gate: SELL signal is suppressed if `(current_price − avg_entry_price) / avg_entry_price < +0.5%` — P&L is computed directly from `position.avg_entry_price` rather than `position.unrealized_plpc` to avoid paper-account pricing discrepancies
-- Closes position if SELL signal fires above confidence floor
-- Independent of the FinViz watchlist — held tickers are never missed
+- Fetches all open positions once via `get_held_positions()`. This pass doesn't depend on the watchlist, so held tickers are never missed.
+- Runs the SELL detector on every held ticker.
+- **P&L gate:** a SELL signal is ignored unless `(current_price − avg_entry_price) / avg_entry_price ≥ +0.5%` (`MIN_SELL_PNL_PCT`). The ML SELL only closes small winners. The bracket stop handles downside.
+- **Max hold:** once a position has been held for `horizon` bars (12 × 4h, read from the BUY champion) *and* P&L ≤ 0, it's force-closed. Winners past the horizon keep riding toward the TP. Entry time comes from replaying `orders.csv`.
 
-**Pass 2 — BUY** (FinViz watchlist):
-- Fetches momentum stocks from FinViz screener
-- Skips any ticker already held
-- Fetches **90 calendar days** of 4H bars per candidate (~120 bars); skips with "insufficient data" if fewer than 100 bars are returned (required by the feature builder: window=30 + horizon=12 + 50 buffer = 92 bars minimum)
-- Runs BUY detector; places GTC bracket order if signal fires above confidence threshold
-- Before placing each order, fetches the live ask price via `get_live_price()` (falls back to last trade price, then prior close) — stop and take-profit are anchored to the current market ask
-- Stop loss fixed at **-0.8%** and take profit fixed at **+1.0%** — matching the BUY model's training barriers exactly. Bracket orders use `time_in_force="gtc"` so stops survive overnight.
+**Pass 2 — BUY** (Alpaca most-actives watchlist):
+- `AlpacaConnection.get_most_active_symbols()` pulls Alpaca's top-50 most-actives screener list, then drops:
+  - ETFs/ETNs (leveraged/inverse funds, bond ETFs, crypto trusts, via `_FUND_NAME_RE`)
+  - share classes and warrants
+  - anything under **$10**
+  - anything under **$100M/day** in dollar volume
+
+  That leaves ~15–20 names. `_validate_watchlist()` logs a loud `ERROR` if ≥50% of tickers aren't real Alpaca symbols, which catches silent data-source failures.
+- Skips tickers already held, plus any ticker exited within the last **7 days** (`REENTRY_COOLDOWN_DAYS`).
+- Fetches **90 calendar days** of 4H bars per candidate and skips any with fewer than 100 bars.
+- Scores every candidate, ranks by probability, and buys only the **top 5** that clear the confidence threshold (capped by open slots; `MAX_POSITIONS = 20`).
+- Anchors the bracket to the live ask from `get_live_price()` (falls back to last trade, then prior close). Stop-loss is **−2.0%** and take-profit is **+2.5%**, `time_in_force="gtc"`. These are wider than the 0.8%/1.0% training barriers so trades survive intraday noise on 4h bars (changed 2026-06-25).
+- Position size is 2% of buying power, capped at $1,000 per trade.
+
+### Tunable constants (`ml_trader.py` / `paper_trade_validator.py`)
+
+| Constant | Value | Purpose |
+|----------|-------|---------|
+| `STOP_LOSS_PCT` | 0.020 | Bracket stop-loss |
+| `TAKE_PROFIT_PCT` | 0.025 | Bracket take-profit |
+| `MIN_SELL_PNL_PCT` | 0.005 | ML SELL only fires above this gain |
+| `REENTRY_COOLDOWN_DAYS` | 7 | Days before a just-exited symbol can be re-bought (0 disables) |
+| `MAX_POSITIONS` | 20 | Max concurrent positions |
+| `WATCHLIST_INVALID_PCT` | 0.5 | Invalid-ticker fraction that triggers the watchlist alarm |
 
 ## Models
 
@@ -262,22 +284,25 @@ Each run executes two passes:
 
 | Parameter | Value |
 |-----------|-------|
-| Classifier | XGBoost |
+| Classifier | XGBoost (200 trees, max_depth=10) |
 | Window size | 30 bars (4h) |
 | Horizon | 12 bars (4h) ≈ 48 hours |
 | Take profit (label) | 1.0% |
 | Stop loss (label) | 0.8% |
-| Decision threshold | 0.777 |
-| Precision | 50.0% |
-| Recall | 49.2% |
-| F1 | 0.496 |
+| Decision threshold | 0.814 |
+| Precision | 50.0% (pinned to the floor) |
+| Recall | 22.1% |
+| F1 | 0.307 |
+| ROC-AUC / PR-AUC | 0.567 / 0.477 |
+| Sample | TP=11,523 · FP=11,519 · 264k BUY-labelled samples |
 | Feature mode | combined |
 | Labeling | Triple-barrier |
-| Training data | 1,312 symbols, 2023-01-01 – 2026-05-28 |
-| Search date | 2026-06-05 (full dataset, precision-weighted) |
+| Training data | 1,312 symbols (4h bars) |
+| Search | Full grid, 2,016 combos, 2026-07-18 (`champion_params_20260718_155350.json`) |
 
-**Previous champion (recall-first, superseded after paper trade analysis):**
-Random Forest, window=21, horizon=6, 38.2% precision, 100% recall — produced 40% live win rate.
+**Separability finding (2026-07-25):** ROC-AUC across the whole grid ranged 0.545–0.614 (mean 0.570). The ceiling among statistically robust rows was 0.611. The current indicator/catch22 feature set doesn't carry much signal for this labeling task. More grid searches over the same features aren't expected to help.
+
+**Previous champions:** 2026-06-07 XGBoost (threshold 0.777, 50.0% precision / 49.2% recall). Before that, a recall-first Random Forest (window=21, horizon=6, 38.2% precision, 100% recall) that produced a 40% live win rate.
 
 ### SELL Detector (Current Champion)
 
@@ -298,13 +323,9 @@ Random Forest, window=21, horizon=6, 38.2% precision, 100% recall — produced 4
 
 Optimised for recall (fast exits). Champion selection requires `precision ≥ 40%`, ranked by F1.
 
-The `sell_threshold=0.005` (0.5% decline = SELL label) was inadvertently dropped from the quick search space in earlier runs, capping achievable precision at ~34–35%. Restoring it allowed the search to find the current champion at 41.3% precision. This threshold should remain in the quick search space.
+**Status (2026-07-26):** A full 1,152-combo SELL grid search found no combination that qualified as champion (ROC-AUC 0.521–0.566), so this 2026-05-30 model is still live. In practice the +0.5% P&L gate makes it a "take small profits" trigger. The 2026-09-01 backtest put it at about +$51 net versus removing it, and every alternative exit tested (trailing stops at 1.0–2.5%, higher gates) lost money. It stays as-is.
 
-If the SELL detector is still exiting too early, levers to consider (in order of ease):
-1. Raise `--sell-confidence` at runtime (no retraining)
-2. Raise `min_recall` floor in search to push the optimizer toward higher-confidence signals
-3. Add a minimum hold time before SELL can fire
-4. Shorten `horizon` in the search space to filter slow-burn reversals
+The `sell_threshold=0.005` (0.5% decline = SELL label) was inadvertently dropped from the quick search space in earlier runs, capping achievable precision at ~34–35%. Restoring it allowed the search to find the current champion at 41.3% precision. This threshold should remain in the quick search space.
 
 ### Feature Modes
 
@@ -330,6 +351,7 @@ The BUY threshold is chosen to maximize F-beta (β=0.5) subject to the precision
 | `models/binary_search_results/` | BUY champion `.pkl` + search results `.csv` |
 | `models/sell_search_results/` | SELL champion `.pkl` + search results `.csv` |
 | `saved_data/historical_4h/*.parquet` | 4-hour OHLCV data per ticker |
+| `reports/` | Periodic performance analyses |
 
 ## Monitoring Dashboard
 
@@ -360,13 +382,11 @@ streamlit run dashboard/app.py
 
 > **Note:** The dashboard uses the `alpaca-py` SDK (not the older `alpaca-trade-api`). Secrets only need the two keys above — no endpoint configuration required.
 
-## FinViz Screening Criteria
+## Watchlist Source
 
-Default filters (configurable in `stock_picker/stock_screener.py`):
-- Market cap: Small cap and over
-- Relative volume: Over 2× average
-- Performance: Up over 5 days
-- Sorted by: Market cap descending
+The BUY watchlist comes from Alpaca's `/v1beta1/screener/stocks/most-actives` endpoint (see [Trading Loop](#trading-loop) for filters). It replaced the FinViz scraper on 2026-07-27. FinViz had started serving deliberately corrupted tickers (e.g. `OOTLY` for `OTLY`) to non-browser requests, which silently stopped all trading for ~10 days while CI still reported success. `stock_picker/stock_screener.py` still exists but is used only by `Streaming_Method/`.
+
+> **Troubleshooting tip:** if performance looks suspiciously flat, check the date range of `signals.csv` first. It stops growing when the watchlist source breaks, even if the workflow is green.
 
 ## Current Status
 
@@ -374,15 +394,22 @@ Default filters (configurable in `stock_picker/stock_screener.py`):
 |-------|-------------|--------|
 | 1 | Data collection (daily + 4h parquet) | ✅ Complete |
 | 2 | Feature engineering (catch22 + indicators + combined) | ✅ Complete |
-| 3 | BUY detector training + champion selection | ✅ Complete (precision-weighted retrain 2026-06-07) |
+| 3 | BUY detector training + champion selection | ✅ Complete (full-grid champion 2026-07-25; weak separability confirmed) |
 | 4 | BUY detector integrated into trading loop | ✅ Complete |
-| 5 | SELL detector training + champion selection | ✅ Complete |
-| 6 | Full BUY + SELL integration + paper trading | 🔄 In progress |
+| 5 | SELL detector training + champion selection | ✅ Complete (full-grid confirmed no better SELL model, 2026-07-26) |
+| 6 | Full BUY + SELL integration + paper trading | ✅ Running |
 | 6a | Streamlit monitoring dashboard | ✅ Complete |
 | 6b | Performance analysis + objective pivot | ✅ Complete (2026-06-05) |
-| 7 | Refinement (ensemble, market context, walk-forward) | ⏳ Planned |
+| 6c | Watchlist hardening, re-entry cooldown, exit backtest | ✅ Complete (2026-09-01) |
+| 7 | BUY model improvement — market-context features, label target, walk-forward | 🔜 Next |
 
-**Active work:** New precision-weighted BUY champion deployed (2026-06-07) — XGBoost, window=30, horizon=12, 50% precision / 49.2% recall. Replaces recall-first model that produced 40% live win rate. Full BUY + SELL system running on paper via GitHub Actions (9:30 AM and 1:30 PM ET, Mon–Fri). Streamlit dashboard live. Performance report at [`reports/2026-06-05_performance_report.md`](reports/2026-06-05_performance_report.md).
+**Recent history:**
+- **2026-06-25:** live brackets widened to SL −2.0% / TP +2.5%.
+- **2026-07-25:** full-grid BUY champion deployed; max-hold force-close added.
+- **2026-07-27:** watchlist moved from FinViz to Alpaca's screener.
+- **2026-09-01:** the analysis of 62 round-trips since the bracket change (−$1,264 net) found the loss was almost entirely 12 gap-through stop-outs on thin sub-$5 names. Fixes: an ETF/price/liquidity filter on the watchlist and a 7-day re-entry cooldown. A bar-level backtest showed the current exit policy beats every alternative tested.
+
+**What's next:** Losses trace to entry quality, not exits. Phase 7 targets the BUY model directly with market-context features and a label-target review. See [ML_TRADING_PLAN.md](ML_TRADING_PLAN.md).
 
 ## Development Roadmap
 
